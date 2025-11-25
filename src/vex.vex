@@ -1,9 +1,14 @@
-// src/vex.vex — the living heart
-const std = use "./std"
-
-fn main() {
-    print("hello vex, my beautiful monster")
+@accel
+fn fib(n: i64) -> i64 {
+    if n <= 1 { return n }
+    return fib(n-1) + fib(n-2)
 }
 
-@accel
-fn fast() -> i32 { return 666 }
+fn main() {
+    let n = 16
+    let result = fib(n)
+
+    print("fib({n}) = {result}\n")
+    print("Vex just ran real recursion on November 25, 2025\n")
+    print("Driven by a pure Vex interpreter — no LLVM, no C.\n")
+}

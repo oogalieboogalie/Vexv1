@@ -1,13 +1,699 @@
-// compiler.vex — the god file
+// compiler.vex - the god file (day 1 self-hosting sketch)
+// Today: the Zig bootstrap interpreter runs Vex directly.
+// Tomorrow: this file becomes the first real Vex compiler that can compile that interpreter.
+
 use "./vex.vex"
+
+// --- Token model (mirrors bootstrap/main.zig) ---
+
+type TokenKind = enum {
+    identifier,
+    string,
+    integer,
+    keyword_let,
+    keyword_print,
+    keyword_fn,
+    keyword_return,
+    keyword_if,
+    keyword_accel,
+    l_paren,
+    r_paren,
+    l_brace,
+    r_brace,
+    equal,
+    plus,
+    minus,
+    star,
+    slash,
+    less,
+    less_equal,
+    eof,
+}
+
+type Token = struct {
+    kind: TokenKind,
+    text: []u8,
+    line: i32,
+    col: i32,
+}
+
+// --- Minimal AST for the first self-hosted frontend ---
+// We start with function declarations + the token ranges for their bodies.
+// Expressions and statements are represented by a tiny AST.
+
+type Value = i64
+
+type StmtKind = enum {
+    let_decl,
+    return_stmt,
+    if_stmt,
+    expr_stmt,
+}
+
+type ExprKind = enum {
+    integer,
+    name,
+    call,
+    binary,
+}
+
+type Expr = struct {
+    kind: ExprKind,
+    token_index: usize,
+    // For binary expressions
+    left: ?*Expr,
+    right: ?*Expr,
+    op: ?TokenKind,
+    // For calls
+    callee: ?[]u8,
+    args: []Expr,
+}
+
+type Stmt = struct {
+    kind: StmtKind,
+    name: ?[]u8,
+    expr: ?Expr,
+    then_body: []Stmt,
+    else_body: []Stmt,
+}
+
+type FuncAst = struct {
+    name: []u8,
+    param_name: ?[]u8,
+    body_start: usize,
+    body_end: usize,
+    is_accel: bool,
+    body: []Stmt,
+}
+
+type ProgramAst = struct {
+    functions: []FuncAst,
+}
+
+// Runtime environment for vex_eval: stores variables and functions.
+// In a future Vex stdlib this would be backed by proper hash maps.
+type Env = struct {
+    parent: ?*Env,
+    vars: Map[[]u8, Value],
+    funcs: Map[[]u8, FuncAst],
+}
+
+fn env_new(parent: ?*Env) -> *Env {
+    let e = new Env
+    e.parent = parent
+    e.vars = Map[[]u8, Value]{}
+    e.funcs = Map[[]u8, FuncAst]{}
+    return e
+}
+
+fn env_get_var(env: *Env, name: []u8) -> ?Value {
+    if (env.vars.contains(name)) return env.vars[name]
+    if (env.parent != null) return env_get_var(env.parent, name)
+    return null
+}
+
+fn env_set_var(env: *Env, name: []u8, v: Value) {
+    env.vars[name] = v
+}
+
+fn env_get_func(env: *Env, name: []u8) -> ?FuncAst {
+    if (env.funcs.contains(name)) return env.funcs[name]
+    if (env.parent != null) return env_get_func(env.parent, name)
+    return null
+}
+
+fn env_set_func(env: *Env, name: []u8, f: FuncAst) {
+    env.funcs[name] = f
+}
+
+fn is_space(c: u8) -> bool {
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n'
+}
+
+fn is_alpha(c: u8) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_'
+}
+
+fn is_digit(c: u8) -> bool {
+    return c >= '0' and c <= '9'
+}
+
+// First real compiler function written in Vex: a lexer that
+// conceptually matches the one in bootstrap/main.zig.
+fn vex_tokenize(src: []u8) -> []Token {
+    let tokens = []Token{}      // dynamic growable buffer in future Vex std
+    let i: usize = 0
+    let line: i32 = 1
+    let col: i32 = 1
+
+    while (i < src.len) {
+        let c = src[i]
+
+        // whitespace
+        if (c == ' ' or c == '\t' or c == '\r') {
+            i += 1
+            col += 1
+            continue
+        }
+        if (c == '\n') {
+            i += 1
+            line += 1
+            col = 1
+            continue
+        }
+
+        // strings
+        if (c == '"') {
+            let start = i
+            i += 1
+            col += 1
+            while (i < src.len and src[i] != '"') {
+                if (src[i] == '\n') { line += 1; col = 1 } else { col += 1 }
+                i += 1
+            }
+            if (i < src.len and src[i] == '"') {
+                i += 1
+                col += 1
+            }
+            tokens.append(Token{
+                .kind = .string,
+                .text = src[start..i],
+                .line = line,
+                .col = col,
+            })
+            continue
+        }
+
+        // single-character tokens
+        if (c == '(' or c == ')' or c == '{' or c == '}' or
+            c == '+' or c == '-' or c == '*' or c == '/' or c == '=')
+        {
+            let kind =
+                if (c == '(') .l_paren else if (c == ')') .r_paren
+                else if (c == '{') .l_brace else if (c == '}') .r_brace
+                else if (c == '+') .plus else if (c == '-') .minus
+                else if (c == '*') .star else if (c == '/') .slash
+                else .equal
+
+            tokens.append(Token{
+                .kind = kind,
+                .text = src[i..i+1],
+                .line = line,
+                .col = col,
+            })
+            i += 1
+            col += 1
+            continue
+        }
+
+        // numbers
+        if (is_digit(c)) {
+            let start = i
+            while (i < src.len and is_digit(src[i])) { i += 1; col += 1 }
+            tokens.append(Token{
+                .kind = .integer,
+                .text = src[start..i],
+                .line = line,
+                .col = col,
+            })
+            continue
+        }
+
+        // identifiers / keywords
+        if (is_alpha(c)) {
+            let start = i
+            while (i < src.len and (is_alpha(src[i]) or is_digit(src[i]))) { i += 1; col += 1 }
+            let word = src[start..i]
+
+            let kind =
+                if (word == "let") .keyword_let
+                else if (word == "print") .keyword_print
+                else if (word == "fn") .keyword_fn
+                else if (word == "return") .keyword_return
+                else if (word == "if") .keyword_if
+                else if (word == "accel") .keyword_accel
+                else .identifier
+
+            tokens.append(Token{
+                .kind = kind,
+                .text = word,
+                .line = line,
+                .col = col,
+            })
+            continue
+        }
+
+        // unknown character: for now just skip it
+        i += 1
+        col += 1
+    }
+
+    tokens.append(Token{
+        .kind = .eof,
+        .text = "",
+        .line = line,
+        .col = col,
+    })
+
+    return tokens      // future: this becomes a real slice
+}
+
+// --- Pratt parser foundation (expression-level) ---
+
+var p_tokens: []Token = []Token{};
+var p_pos: usize = 0;
+
+fn p_peek() Token { return p_tokens[p_pos]; }
+fn p_advance() Token { let t = p_tokens[p_pos]; p_pos += 1; return t; }
+
+fn p_is_at_end() bool { return p_peek().kind == .eof; }
+
+fn prefix_expr() Expr {
+    let t = p_advance();
+
+    if (t.kind == .integer) {
+        return Expr{
+            .kind = .integer,
+            .token_index = p_pos - 1,
+            .left = null,
+            .right = null,
+            .op = null,
+            .callee = null,
+            .args = []Expr{},
+        };
+    }
+
+    if (t.kind == .identifier) {
+        // Might be a bare name or a call; the Pratt loop will handle calls
+        return Expr{
+            .kind = .name,
+            .token_index = p_pos - 1,
+            .left = null,
+            .right = null,
+            .op = null,
+            .callee = null,
+            .args = []Expr{},
+        };
+    }
+
+    if (t.kind == .l_paren) {
+        let inner = parse_expr(0);
+        if (p_peek().kind == .r_paren) _ = p_advance();
+        return inner;
+    }
+
+    // For now, anything else is an error-shaped node.
+    return Expr{
+        .kind = .name,
+        .token_index = p_pos - 1,
+        .left = null,
+        .right = null,
+        .op = null,
+        .callee = null,
+        .args = []Expr{},
+    };
+}
+
+fn infix_binding_power(op: TokenKind) -> (i32, i32) {
+    // Very small precedence table:
+    // * /   >   + -   >   < <=
+    if (op == .star or op == .slash) {
+        return (100, 101);
+    }
+    if (op == .plus or op == .minus) {
+        return (90, 91);
+    }
+    if (op == .less or op == .less_equal) {
+        return (80, 81);
+    }
+    return (0, 0);
+}
+
+fn parse_expr(min_bp: i32) -> Expr {
+    var lhs = prefix_expr();
+
+    while (true) {
+        let op_tok = p_peek();
+        if (op_tok.kind != .plus and op_tok.kind != .minus and
+            op_tok.kind != .star and op_tok.kind != .slash and
+            op_tok.kind != .less and op_tok.kind != .less_equal)
+        {
+            break;
+        }
+
+        let (l_bp, r_bp) = infix_binding_power(op_tok.kind);
+        if (l_bp < min_bp) break;
+
+        _ = p_advance(); // consume operator
+
+        var rhs = parse_expr(r_bp);
+
+        // Allocate nodes in a growable arena in future Vex; for now
+        // we conceptually build them as nested structs.
+        var boxed_lhs = &lhs;
+        var boxed_rhs = &rhs;
+
+        lhs = Expr{
+            .kind = .binary,
+            .token_index = p_pos - 1,
+            .left = boxed_lhs,
+            .right = boxed_rhs,
+            .op = op_tok.kind,
+            .callee = null,
+            .args = []Expr{},
+        };
+    }
+
+    // Function call postfix: name(args...)
+    while (p_peek().kind == .l_paren) {
+        // Only allow calls where lhs is a name for now.
+        if (lhs.kind != .name) break;
+
+        _ = p_advance(); // '('
+        let args = []Expr{};
+        if (p_peek().kind != .r_paren) {
+            while (true) {
+                let arg = parse_expr(0);
+                args.append(arg);
+                if (p_peek().kind == .r_paren) break;
+                // assume comma-separated in the future
+            }
+        }
+        if (p_peek().kind == .r_paren) _ = p_advance();
+
+        lhs = Expr{
+            .kind = .call,
+            .token_index = lhs.token_index,
+            .left = null,
+            .right = null,
+            .op = null,
+            .callee = lhs_token_text(lhs), // helper for name text
+            .args = args,
+        };
+    }
+
+    return lhs;
+}
+
+fn lhs_token_text(e: Expr) -> []u8 {
+    // In a real implementation, we'd tie Expr nodes back to the Token table;
+    // for now this is a placeholder to indicate intent.
+    return "<name>";
+}
+
+// --- Statement-level parsing for function bodies ---
+
+fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
+    let stmts = []Stmt{};
+    let i: usize = start;
+
+    while (i <= end and tokens[i].kind != .eof) {
+        let t = tokens[i];
+
+        if (t.kind == .keyword_let) {
+            // let name = expr
+            i += 1;
+            let name_tok = tokens[i];
+            i += 1; // past identifier
+            if (tokens[i].kind == .equal) i += 1;
+
+            // parse expression starting at i
+            p_tokens = tokens;
+            p_pos = i;
+            let expr = parse_expr(0);
+            i = p_pos;
+
+            stmts.append(Stmt{
+                .kind = .let_decl,
+                .name = name_tok.text,
+                .expr = expr,
+                .then_body = []Stmt{},
+                .else_body = []Stmt{},
+            });
+            continue;
+        }
+
+        if (t.kind == .keyword_return) {
+            i += 1;
+            p_tokens = tokens;
+            p_pos = i;
+            let expr = parse_expr(0);
+            i = p_pos;
+
+            stmts.append(Stmt{
+                .kind = .return_stmt,
+                .name = null,
+                .expr = expr,
+                .then_body = []Stmt{},
+                .else_body = []Stmt{},
+            });
+            continue;
+        }
+
+        if (t.kind == .keyword_if) {
+            // if expr { ... }
+            i += 1;
+            p_tokens = tokens;
+            p_pos = i;
+            let cond = parse_expr(0);
+            i = p_pos;
+
+            // expect '{'
+            if (tokens[i].kind == .l_brace) {
+                let then_start = i + 1;
+                let depth: usize = 1;
+                i += 1;
+                while (i <= end and depth > 0) {
+                    if (tokens[i].kind == .l_brace) depth += 1;
+                    else if (tokens[i].kind == .r_brace) depth -= 1;
+                    i += 1;
+                }
+                let then_end = if (i > 0) i - 2 else then_start;
+                let then_body = vex_parse_body(tokens, then_start, then_end);
+
+                stmts.append(Stmt{
+                    .kind = .if_stmt,
+                    .name = null,
+                    .expr = cond,
+                    .then_body = then_body,
+                    .else_body = []Stmt{},
+                });
+                continue;
+            }
+        }
+
+        // Fallback: expression statement
+        p_tokens = tokens;
+        p_pos = i;
+        let expr = parse_expr(0);
+        i = p_pos;
+
+        stmts.append(Stmt{
+            .kind = .expr_stmt,
+            .name = null,
+            .expr = expr,
+            .then_body = []Stmt{},
+            .else_body = []Stmt{},
+        });
+    }
+
+    return stmts;
+}
+
+// --- Vex-side evaluator over the AST ---
+
+type EvalResult = struct {
+    has_value: bool,
+    value: Value,
+}
+
+fn eval_expr(e: Expr, env: *Env) -> Value {
+    if (e.kind == .integer) {
+        // In a real implementation we'd parse from the token text;
+        // for now assume the interpreter already did so upstream.
+        let tok = p_tokens[e.token_index];
+        return parse_int(tok.text);
+    }
+
+    if (e.kind == .name) {
+        let tok = p_tokens[e.token_index];
+        let v = env_get_var(env, tok.text);
+        return v orelse 0;
+    }
+
+    if (e.kind == .binary) {
+        let left_val = eval_expr(*e.left, env);
+        let right_val = eval_expr(*e.right, env);
+        if (e.op == .plus) return left_val + right_val;
+        if (e.op == .minus) return left_val - right_val;
+        if (e.op == .star) return left_val * right_val;
+        if (e.op == .slash) return left_val / right_val;
+        if (e.op == .less) return if (left_val < right_val) 1 else 0;
+        if (e.op == .less_equal) return if (left_val <= right_val) 1 else 0;
+        return 0;
+    }
+
+    if (e.kind == .call) {
+        let f = env_get_func(env, e.callee);
+        if (f == null) return 0;
+
+        let call_env = env_new(env);
+        if (f.param_name != null and e.args.len > 0) {
+            let arg_val = eval_expr(e.args[0], env);
+            env_set_var(call_env, f.param_name, arg_val);
+        }
+
+        let res = eval_block(f.body, call_env);
+        if (res.has_value) return res.value;
+        return 0;
+    }
+
+    return 0;
+}
+
+fn eval_block(stmts: []Stmt, env: *Env) -> EvalResult {
+    let result = EvalResult{ .has_value = false, .value = 0 };
+    for (stmts) |s| {
+        let r = eval_stmt(s, env);
+        if (r.has_value) return r;
+    }
+    return result;
+}
+
+fn eval_stmt(s: Stmt, env: *Env) -> EvalResult {
+    if (s.kind == .let_decl) {
+        let v = eval_expr(s.expr, env);
+        env_set_var(env, s.name, v);
+        return EvalResult{ .has_value = false, .value = 0 };
+    }
+
+    if (s.kind == .expr_stmt) {
+        _ = eval_expr(s.expr, env);
+        return EvalResult{ .has_value = false, .value = 0 };
+    }
+
+    if (s.kind == .return_stmt) {
+        let v = eval_expr(s.expr, env);
+        return EvalResult{ .has_value = true, .value = v };
+    }
+
+    if (s.kind == .if_stmt) {
+        let cond = eval_expr(s.expr, env);
+        if (cond != 0) {
+            return eval_block(s.then_body, env);
+        } else {
+            return eval_block(s.else_body, env);
+        }
+    }
+
+    return EvalResult{ .has_value = false, .value = 0 };
+}
+
+fn vex_eval(program: ProgramAst) -> Value {
+    let global = env_new(null);
+
+    for (program.functions) |f| {
+        env_set_func(global, f.name, f);
+    }
+
+    // Find main and execute it.
+    let main = env_get_func(global, "main");
+    if (main == null) return 0;
+
+    let res = eval_block(main.body, global);
+    if (res.has_value) return res.value;
+    return 0;
+}
+
+// First parser written in Vex: produces a minimal AST of function
+// declarations and their statement bodies, mirroring the logic the Zig
+// interpreter currently uses.
+fn vex_parse(tokens: []Token) -> ProgramAst {
+    let funcs = []FuncAst{}      // growable buffer in future Vex std
+    let i: usize = 0
+
+    while (i < tokens.len and tokens[i].kind != .eof) {
+        let is_accel = (tokens[i].kind == .keyword_accel)
+        if (is_accel) {
+            i += 1
+        }
+
+        if (i >= tokens.len or tokens[i].kind != .keyword_fn) {
+            i += 1
+            continue
+        }
+
+        i += 1 // consume 'fn'
+        let name_tok = tokens[i]
+        i += 1
+
+        let param_name: ?[]u8 = null
+
+        if (i < tokens.len and tokens[i].kind == .l_paren) {
+            i += 1
+            if (i < tokens.len and tokens[i].kind != .r_paren) {
+                let param_tok = tokens[i]
+                if (param_tok.kind == .identifier) {
+                    param_name = param_tok.text
+                }
+                // Skip the rest of the signature (types, etc.) until ')'
+                while (i < tokens.len and tokens[i].kind != .r_paren and tokens[i].kind != .eof) {
+                    i += 1
+                }
+            }
+            if (i < tokens.len and tokens[i].kind == .r_paren) {
+                i += 1
+            }
+        }
+
+        // Skip tokens until body '{'
+        while (i < tokens.len and tokens[i].kind != .l_brace and tokens[i].kind != .eof) {
+            i += 1
+        }
+        if (i >= tokens.len or tokens[i].kind != .l_brace) {
+            break
+        }
+
+        // Enter body
+        i += 1
+        let body_start = i
+        let depth: usize = 1
+
+        while (i < tokens.len and depth > 0) {
+            if (tokens[i].kind == .l_brace) {
+                depth += 1
+            } else if (tokens[i].kind == .r_brace) {
+                depth -= 1
+            }
+            i += 1
+        }
+
+        let body_end = if (i > 0) i - 1 else 0
+        let body = vex_parse_body(tokens, body_start, body_end)
+
+        funcs.append(FuncAst{
+            .name = name_tok.text,
+            .param_name = param_name,
+            .body_start = body_start,
+            .body_end = body_end,
+            .is_accel = is_accel,
+            .body = body,
+        })
+    }
+
+    return ProgramAst{ .functions = funcs }
+}
 
 comptime {
     let src = read_file("vex.vex")
-    let tokens = gpu_parse(src)            // neural parser running on your GPU right now
-    let ast = parse(tokens)
-    let mir = lower(ast)
-    let llvm_ir = codegen(mir)
-    let binary = llvm_jit(llvm_ir)         // no disk, pure memory
+
+    // First step of the self-hosted compiler: tokenize using Vex code.
+    let tokens   = vex_tokenize(src)
+    let ast      = vex_parse(tokens)    // future: richer AST
+    let mir      = lower(ast)       // future: lower_to_bytecode(ast)
+    let llvm_ir  = codegen(mir)     // or emit_bytecode(mir)
+    let binary   = llvm_jit(llvm_ir)         // no disk, pure memory
+
     write_file("vex", binary)
-    print("self-hosted in 0.37s ✓")
+    print("self-hosted in 0.37s –")
 }
