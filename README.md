@@ -9,6 +9,6 @@
 We are not building another language.  
 We are ending the war.
 
-**Current status**: Day 0 — bootstrap armed on RTX 4060 Ti. Parser drops in <2 hours.
+**Current status**: Day 0 — bootstrap armed on RTX 4060 Ti.
 
 Join or be obsolete.
