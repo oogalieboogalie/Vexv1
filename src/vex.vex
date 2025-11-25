@@ -1,0 +1,9 @@
+// src/vex.vex — the living heart
+const std = use "./std"
+
+fn main() {
+    print("hello vex, my beautiful monster")
+}
+
+@accel
+fn fast() -> i32 { return 666 }

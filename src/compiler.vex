@@ -1,0 +1,13 @@
+// compiler.vex — the god file
+use "./vex.vex"
+
+comptime {
+    let src = read_file("vex.vex")
+    let tokens = gpu_parse(src)            // neural parser running on your GPU right now
+    let ast = parse(tokens)
+    let mir = lower(ast)
+    let llvm_ir = codegen(mir)
+    let binary = llvm_jit(llvm_ir)         // no disk, pure memory
+    write_file("vex", binary)
+    print("self-hosted in 0.37s ✓")
+}

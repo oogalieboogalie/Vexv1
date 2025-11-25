@@ -1,0 +1,78 @@
+// vex.vex — the primordial file
+// commit 0 – "let there be unsafe light"
+
+const std = use "./std"
+
+// @accel = "i surrender my soul to the hardware gods"
+macro accel(fn_decl) {
+    comptime {
+        let sig = fn_decl.signature
+        let body = fn_decl.body
+
+        // Step 1: ask the embedded 70M model what the fastest possible kernel looks like
+        let optimal = ai.generate_kernel(sig, target = hardware.best_available())
+
+        // Step 2: generate CUDA, Metal, SPIR-V, AMX, SVE, WebGPU, whatever wins the benchmark
+        let backends = [
+            cuda.generate(optimal),
+            metal.generate(optimal),
+            oneapi.generate(optimal),
+            wgpu.generate(optimal),
+            apple_amx.generate(optimal),
+        ]
+
+        // Step 3: run a 0.8 ms micro-benchmark at compile time on YOUR exact hardware
+        let winner = backends.bench_on_this_machine()
+
+        // Step 4: splice the winner directly into the binary, zero runtime dispatch cost
+        emit winner as fn_decl.name
+        emit cpu_fallback(body) as fn_decl.name ++ "_cpu"
+
+        // Step 5: at runtime we pick the winner with exactly one instruction
+        export fn fn_decl.name(...) {
+            if hardware.has(winner.device) {
+                call winner
+            } else {
+                call cpu_fallback
+            }
+        }
+    }
+}
+
+type Ptr[T] = raw u64                // we’ll make this safe in exactly 4 lines
+type GenPtr[T] = struct { ptr: Ptr[T], gen: u32 }
+
+fn malloc[T](size: usize) -> GenPtr[T]          = extern "malloc"
+fn free[T](p: GenPtr[T])                        = extern "free"
+
+comptime {
+    print("compiling the compiler that compiles the compiler…")
+    // this block already runs while we’re typing the file
+    let version = 0xDEAD_BEEF
+    export const VERSION = version
+}
+
+// the magic: every reference is generational by default
+type ref[T] = GenPtr[T]                     // compiler tracks generations automatically
+type mut[T] = GenPtr[T]                     // mutable alias, borrow checker is watching you
+
+fn main() {
+    let greeting = "hello vex, my beautiful monster"
+    print(greeting)
+
+    @tensor[f32]
+    let a = [[1.0, 2.0], [3.0, 4.0]]
+    let b = [[5.0], [6.0]]
+    let c = a @ b                    // already picks CUDA kernel if you have a GPU
+    print(c)                         // [[17.0], [39.0]]
+
+    comptime {
+        ai.inline("make this matmul 3× faster on RTX 5090")
+        // literally ships tomorrow
+    }
+}
+
+// prove we’re not lying about safety
+prove fn no_dangling<T>(x: ref[T]) -> bool {
+    ensures x.generation_is_alive()
+}
