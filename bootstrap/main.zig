@@ -1,9 +1,91 @@
-// bootstrap/main.zig — v0.0.4 LIVE INTERPRETER (NO LLVM)
+// bootstrap/main.zig - v0.0.4 LIVE INTERPRETER (NO LLVM)
 const std = @import("std");
 const print = std.debug.print;
 const allocator = std.heap.page_allocator;
 
-const Value = i64;
+const Value = union(enum) {
+    int: i64,
+    str: []const u8,
+};
+
+fn makeInt(v: i64) Value {
+    return .{ .int = v };
+}
+
+fn expectInt(v: Value) i64 {
+    return switch (v) {
+        .int => |i| i,
+        .str => @panic("expected integer"),
+    };
+}
+
+fn expectStr(v: Value) []const u8 {
+    return switch (v) {
+        .str => |s| s,
+        .int => "",
+    };
+}
+
+fn isZeroInt(v: Value) bool {
+    return switch (v) {
+        .int => |i| i == 0,
+        .str => false,
+    };
+}
+const env_debug = false;
+
+// Separate runtime env used by Vex-level env_create/env_set/env_find builtins.
+const KVEnv = struct {
+    parent: ?*KVEnv,
+    map: std.StringHashMap(Value),
+};
+
+fn builtinEnvCreate(parent_handle: ?Value) Value {
+    var parent: ?*KVEnv = null;
+    if (parent_handle) |h| {
+        if (!isZeroInt(h)) {
+            const addr = @as(usize, @intCast(expectInt(h)));
+            parent = @as(*KVEnv, @ptrFromInt(addr));
+        }
+    }
+
+    const env_ptr: *KVEnv = allocator.create(KVEnv) catch @panic("oom");
+    env_ptr.* = .{
+        .parent = parent,
+        .map = std.StringHashMap(Value).init(allocator),
+    };
+
+    const addr: i64 = @intCast(@intFromPtr(env_ptr));
+    return makeInt(addr);
+}
+
+fn builtinEnvSet(env_handle: Value, key: []const u8, value: Value) void {
+    if (isZeroInt(env_handle)) return;
+    const addr = @as(usize, @intCast(expectInt(env_handle)));
+    const env_ptr = @as(*KVEnv, @ptrFromInt(addr));
+    if (env_debug) {
+        const vv = switch (value) {
+            .int => |i| i,
+            .str => |_| -1,
+        };
+        print("[env_set] key='{s}' len={d} value={d}\n", .{key, key.len, vv});
+    }
+    env_ptr.map.put(key, value) catch @panic("oom");
+}
+
+fn builtinEnvFind(env_handle: Value, key: []const u8) ?Value {
+    if (isZeroInt(env_handle)) return null;
+    const addr = @as(usize, @intCast(expectInt(env_handle)));
+    var cur: ?*KVEnv = @as(*KVEnv, @ptrFromInt(addr));
+    while (cur) |e| {
+        if (env_debug) {
+            print("[env_find] key='{s}' len={d} count={d}\n", .{key, key.len, e.map.count()});
+        }
+        if (e.map.get(key)) |v| return v;
+        cur = e.parent;
+    }
+    return null;
+}
 
 const Env = struct {
     parent: ?*Env,
@@ -62,6 +144,8 @@ const Token = struct {
 const Func = struct {
     name: []const u8,
     param_name: ?[]const u8,
+    param_name2: ?[]const u8,
+    param_name3: ?[]const u8,
     body: []Token,
     is_accel: bool,
 };
@@ -69,6 +153,90 @@ const Func = struct {
 var tokens: []Token = &[_]Token{};
 var pos: usize = 0;
 var functions: std.StringHashMap(Func) = undefined;
+
+fn tokenKindLabel(k: Token.Kind) []const u8 {
+    return switch (k) {
+        .keyword_let => "Let",
+        .keyword_print => "Print",
+        .identifier => "Ident",
+        .integer => "Int",
+        .plus => "Plus",
+        .l_paren => "LParen",
+        .r_paren => "RParen",
+        .eof => "Eof",
+        else => "Other",
+    };
+}
+
+fn debugTokenizeZig() void {
+    const source: []const u8 = "let x = 42; print(x + 3)\n";
+
+    var list = std.ArrayList(Token).init(allocator);
+    defer list.deinit();
+
+    var i: usize = 0;
+    var line: usize = 1;
+    while (i < source.len) {
+        const c = source[i];
+
+        // whitespace/newline/semicolon
+        if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == ';') {
+            if (c == '\n') line += 1;
+            i += 1;
+            continue;
+        }
+
+        // identifiers / keywords
+        if (isAlpha(c)) {
+            const start = i;
+            i += 1;
+            while (i < source.len and (isAlpha(source[i]) or isDigit(source[i]) or source[i] == '_')) : (i += 1) {}
+            const word = source[start..i];
+            const kind: Token.Kind =
+                if (std.mem.eql(u8, word, "let")) .keyword_let
+                else if (std.mem.eql(u8, word, "print")) .keyword_print
+                else .identifier;
+            list.append(.{ .kind = kind, .text = word, .line = line }) catch @panic("oom");
+            continue;
+        }
+
+        // numbers
+        if (isDigit(c)) {
+            const start = i;
+            i += 1;
+            while (i < source.len and isDigit(source[i])) : (i += 1) {}
+            list.append(.{ .kind = .integer, .text = source[start..i], .line = line }) catch @panic("oom");
+            continue;
+        }
+
+        // symbols we care about
+        if (c == '+') {
+            list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            i += 1;
+            continue;
+        }
+        if (c == '(') {
+            list.append(.{ .kind = .l_paren, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            i += 1;
+            continue;
+        }
+        if (c == ')') {
+            list.append(.{ .kind = .r_paren, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            i += 1;
+            continue;
+        }
+
+        // ignore anything else (like '=')
+        i += 1;
+    }
+
+    list.append(.{ .kind = .eof, .text = "", .line = line }) catch @panic("oom");
+
+    print("demo_tokenize (zig):\n", .{});
+    for (list.items) |t| {
+        print("tok:{s}:{s}\n", .{ tokenKindLabel(t.kind), t.text });
+    }
+}
 
 fn peek() Token {
     return tokens[pos];
@@ -108,16 +276,21 @@ fn parseFunction(is_accel: bool) void {
     if (name_tok.kind != .identifier) @panic("expected function name");
 
     var param_name: ?[]const u8 = null;
+    var param_name2: ?[]const u8 = null;
+    var param_name3: ?[]const u8 = null;
 
     if (peek().kind == .l_paren) {
         consume(.l_paren);
-        if (peek().kind != .r_paren) {
+        while (peek().kind != .r_paren and peek().kind != .eof) {
             const param_tok = advance();
-            if (param_tok.kind != .identifier) @panic("expected parameter name");
-            param_name = param_tok.text;
-            // Skip the rest of the signature (types, etc.) until ')'
-            while (peek().kind != .r_paren and peek().kind != .eof) {
-                _ = advance();
+            if (param_tok.kind == .identifier) {
+                if (param_name == null) {
+                    param_name = param_tok.text;
+                } else if (param_name2 == null) {
+                    param_name2 = param_tok.text;
+                } else if (param_name3 == null) {
+                    param_name3 = param_tok.text;
+                }
             }
         }
         consume(.r_paren);
@@ -159,6 +332,8 @@ fn parseFunction(is_accel: bool) void {
     const func = Func{
         .name = name_tok.text,
         .param_name = param_name,
+        .param_name2 = param_name2,
+        .param_name3 = param_name3,
         .body = body_slice,
         .is_accel = is_accel,
     };
@@ -170,8 +345,11 @@ fn parseFunction(is_accel: bool) void {
     }
 }
 
-fn runFunction(name: []const u8, arg: ?Value, caller_env: *Env) Value {
-    const func = functions.get(name) orelse @panic("undefined function");
+fn runFunction(name: []const u8, arg1: ?Value, arg2: ?Value, arg3: ?Value, caller_env: *Env) Value {
+    const func = functions.get(name) orelse {
+        print("[undefined function] {s}\n", .{name});
+        @panic("undefined function");
+    };
 
     const saved_tokens = tokens;
     const saved_pos = pos;
@@ -182,14 +360,28 @@ fn runFunction(name: []const u8, arg: ?Value, caller_env: *Env) Value {
     const local_env = Env.create(caller_env) catch @panic("oom");
 
     if (func.param_name) |param| {
-        if (arg) |a| {
+        if (arg1) |a| {
             local_env.set(param, a);
         } else {
-            local_env.set(param, 0);
+            local_env.set(param, makeInt(0));
+        }
+    }
+    if (func.param_name2) |param| {
+        if (arg2) |a| {
+            local_env.set(param, a);
+        } else {
+            local_env.set(param, makeInt(0));
+        }
+    }
+    if (func.param_name3) |param| {
+        if (arg3) |a| {
+            local_env.set(param, a);
+        } else {
+            local_env.set(param, makeInt(0));
         }
     }
 
-    var result: Value = 0;
+    var result: Value = makeInt(0);
     var has_result = false;
 
     while (peek().kind != .eof) {
@@ -203,7 +395,7 @@ fn runFunction(name: []const u8, arg: ?Value, caller_env: *Env) Value {
     tokens = saved_tokens;
     pos = saved_pos;
 
-    return if (has_result) result else 0;
+    return if (has_result) result else makeInt(0);
 }
 
 fn evalPrimary(env: *Env) Value {
@@ -212,29 +404,120 @@ fn evalPrimary(env: *Env) Value {
     // function call: name(...)
     if (t.kind == .identifier and pos + 1 < tokens.len and tokens[pos + 1].kind == .l_paren) {
         const name = t.text;
+
+        // Built-ins live here for now.
+        if (std.mem.eql(u8, name, "env_create") or
+            std.mem.eql(u8, name, "env_set") or
+            std.mem.eql(u8, name, "env_find") or
+            std.mem.eql(u8, name, "str_len") or
+            std.mem.eql(u8, name, "str_char") or
+            std.mem.eql(u8, name, "str_slice"))
+        {
+            _ = advance(); // identifier
+            consume(.l_paren);
+
+            if (std.mem.eql(u8, name, "env_create")) {
+                var parent_handle: ?Value = null;
+                if (peek().kind != .r_paren) {
+                    parent_handle = evalExpr(env);
+                }
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinEnvCreate(parent_handle);
+            } else if (std.mem.eql(u8, name, "env_set")) {
+                // env_set(env_handle, "key", value)
+                const env_handle = evalExpr(env);
+
+                // Next token should be a string literal key
+                const key_tok = peek();
+                if (key_tok.kind != .string) @panic("env_set: expected string key");
+                _ = advance();
+                const key_raw = key_tok.text;
+                const key = key_raw[1 .. key_raw.len - 1];
+
+                const val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+
+                builtinEnvSet(env_handle, key, val);
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "env_find")) {
+                // env_find(env_handle, "key")
+                const env_handle = evalExpr(env);
+
+                const key_tok = peek();
+                if (key_tok.kind != .string) @panic("env_find: expected string key");
+                _ = advance();
+                const key_raw = key_tok.text;
+                const key = key_raw[1 .. key_raw.len - 1];
+
+                if (peek().kind == .r_paren) consume(.r_paren);
+
+                if (builtinEnvFind(env_handle, key)) |v| return v;
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "str_len")) {
+                const s_val = if (peek().kind != .r_paren) evalExpr(env) else Value{ .str = "" };
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const s = expectStr(s_val);
+                return makeInt(@as(i64, @intCast(s.len)));
+            } else if (std.mem.eql(u8, name, "str_char")) {
+                const s_val = evalExpr(env);
+                const idx_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const s = expectStr(s_val);
+                const idx = expectInt(idx_val);
+                if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) return makeInt(0);
+                return makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
+            } else if (std.mem.eql(u8, name, "str_slice")) {
+                const s_val = evalExpr(env);
+                const start_val = evalExpr(env);
+                const end_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const s = expectStr(s_val);
+                var start = expectInt(start_val);
+                var end = expectInt(end_val);
+                if (start < 0) start = 0;
+                if (end < start) end = start;
+                const len = @as(i64, @intCast(s.len));
+                if (start > len) start = len;
+                if (end > len) end = len;
+                const ustart: usize = @intCast(start);
+                const uend: usize = @intCast(end);
+                return .{ .str = s[ustart..uend] };
+            }
+        }
+
+        // User-defined function call (one optional argument)
         _ = advance(); // identifier
         consume(.l_paren);
 
-        var arg: ?Value = null;
+        var arg1: ?Value = null;
+        var arg2: ?Value = null;
+        var arg3: ?Value = null;
         if (peek().kind != .r_paren) {
-            arg = evalExpr(env);
+            arg1 = evalExpr(env);
+        }
+        if (peek().kind != .r_paren) {
+            arg2 = evalExpr(env);
+        }
+        if (peek().kind != .r_paren) {
+            arg3 = evalExpr(env);
         }
         if (peek().kind == .r_paren) consume(.r_paren);
 
-        return runFunction(name, arg, env);
+        return runFunction(name, arg1, arg2, arg3, env);
     }
 
     const token = advance();
 
     return switch (token.kind) {
-        .integer => std.fmt.parseInt(i64, token.text, 10) catch @panic("bad integer"),
-        .identifier => env.get(token.text) orelse @panic("undefined var"),
+        .integer => makeInt(std.fmt.parseInt(i64, token.text, 10) catch @panic("bad integer")),
+        .string => .{ .str = token.text[1 .. token.text.len - 1] },
+        .identifier => env.get(token.text) orelse makeInt(0),
         .l_paren => blk: {
             const v = evalExpr(env);
             consume(.r_paren);
             break :blk v;
         },
-        else => @panic("expected expression"),
+        else => makeInt(0),
     };
 }
 
@@ -246,13 +529,15 @@ fn evalTerm(env: *Env) Value {
         switch (t.kind) {
             .star => {
                 _ = advance();
-                const rhs = evalPrimary(env);
-                result *= rhs;
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalPrimary(env));
+                result = makeInt(lhs * rhs);
             },
             .slash => {
                 _ = advance();
-                const rhs = evalPrimary(env);
-                result = @divTrunc(result, rhs);
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalPrimary(env));
+                result = makeInt(@divTrunc(lhs, rhs));
             },
             else => return result,
         }
@@ -267,23 +552,27 @@ fn evalExpr(env: *Env) Value {
         switch (t.kind) {
             .plus => {
                 _ = advance();
-                const rhs = evalTerm(env);
-                result += rhs;
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalTerm(env));
+                result = makeInt(lhs + rhs);
             },
             .minus => {
                 _ = advance();
-                const rhs = evalTerm(env);
-                result -= rhs;
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalTerm(env));
+                result = makeInt(lhs - rhs);
             },
             .less => {
                 _ = advance();
-                const rhs = evalTerm(env);
-                result = if (result < rhs) 1 else 0;
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalTerm(env));
+                result = makeInt(if (lhs < rhs) 1 else 0);
             },
             .less_equal => {
                 _ = advance();
-                const rhs = evalTerm(env);
-                result = if (result <= rhs) 1 else 0;
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalTerm(env));
+                result = makeInt(if (lhs <= rhs) 1 else 0);
             },
             else => return result,
         }
@@ -317,11 +606,11 @@ fn renderString(env: *Env, raw: []const u8) void {
                 k += 1;
                 while (k < expr.len and (expr[k] == ' ' or expr[k] == '\t')) : (k += 1) {}
 
-                var arg_val: Value = 0;
+                var arg_val: Value = makeInt(0);
                 if (k < expr.len and isDigit(expr[k])) {
                     const arg_start = k;
                     while (k < expr.len and isDigit(expr[k])) : (k += 1) {}
-                    arg_val = std.fmt.parseInt(i64, expr[arg_start..k], 10) catch @panic("bad int in interpolation");
+                    arg_val = makeInt(std.fmt.parseInt(i64, expr[arg_start..k], 10) catch @panic("bad int in interpolation"));
                 } else {
                     const arg_start = k;
                     while (k < expr.len and (isAlpha(expr[k]) or isDigit(expr[k]))) : (k += 1) {}
@@ -332,12 +621,18 @@ fn renderString(env: *Env, raw: []const u8) void {
                 // Skip until closing ')'
                 while (k < expr.len and expr[k] != ')') : (k += 1) {}
 
-                const val = runFunction(name, arg_val, env);
-                print("{d}", .{val});
+                const val = runFunction(name, arg_val, null, null, env);
+                switch (val) {
+                    .int => |n| print("{d}", .{n}),
+                    .str => |s| print("{s}", .{s}),
+                }
             } else {
                 // Plain variable interpolation
                 if (env.get(name)) |v| {
-                    print("{d}", .{v});
+                    switch (v) {
+                        .int => |n| print("{d}", .{n}),
+                        .str => |s| print("{s}", .{s}),
+                    }
                 } else {
                     print("{{{s}}}", .{name});
                 }
@@ -370,6 +665,41 @@ fn evalStmt(env: *Env) ?Value {
     const t = peek();
 
     switch (t.kind) {
+        .keyword_if => {
+            _ = advance(); // 'if'
+            const cond = expectInt(evalExpr(env));
+
+            if (cond != 0) {
+                if (peek().kind == .l_brace) {
+                    if (execBlock(env)) |ret| return ret;
+                } else {
+                    if (evalStmt(env)) |ret| return ret;
+                }
+            } else {
+                if (peek().kind == .l_brace) {
+                    consume(.l_brace);
+                    var depth: usize = 1;
+                    while (depth > 0 and peek().kind != .eof) {
+                        const t2 = advance();
+                        switch (t2.kind) {
+                            .l_brace => depth += 1,
+                            .r_brace => depth -= 1,
+                            else => {},
+                        }
+                    }
+                } else {
+                    // skip one statement
+                    _ = evalStmt(env);
+                }
+            }
+        },
+        .l_brace => {
+            // Skip stray brace tokens inside function bodies.
+            _ = advance();
+        },
+        .r_brace => {
+            _ = advance();
+        },
         .keyword_print => {
             _ = advance(); // 'print'
             if (peek().kind == .l_paren) consume(.l_paren);
@@ -380,7 +710,10 @@ fn evalStmt(env: *Env) ?Value {
                 renderString(env, raw);
             } else {
                 const val = evalExpr(env);
-                print("{d}", .{val});
+                switch (val) {
+                    .int => |n| print("{d}", .{n}),
+                    .str => |s| print("{s}", .{s}),
+                }
             }
 
             if (peek().kind == .r_paren) consume(.r_paren);
@@ -393,37 +726,18 @@ fn evalStmt(env: *Env) ?Value {
             const val = evalExpr(env);
             env.set(name_tok.text, val);
         },
-        .keyword_if => {
-            _ = advance(); // 'if'
-            const cond = evalExpr(env);
-            if (cond != 0) {
-                if (peek().kind != .l_brace) @panic("expected { after if");
-                if (execBlock(env)) |ret| return ret;
-            } else {
-                if (peek().kind != .l_brace) @panic("expected { after if");
-                consume(.l_brace);
-                var depth: usize = 1;
-                while (depth > 0 and peek().kind != .eof) {
-                    const t2 = advance();
-                    switch (t2.kind) {
-                        .l_brace => depth += 1,
-                        .r_brace => depth -= 1,
-                        else => {},
-                    }
-                }
-            }
-        },
         .keyword_return => {
             _ = advance(); // 'return'
             if (peek().kind == .eof or peek().kind == .r_brace) {
-                return 0;
+                return makeInt(0);
             }
             const val = evalExpr(env);
             return val;
         },
         .eof => {},
         else => {
-            _ = advance();
+            // Expression statement: evaluate and ignore the result.
+            _ = evalExpr(env);
         },
     }
 
@@ -432,6 +746,8 @@ fn evalStmt(env: *Env) ?Value {
 
 pub fn main() !void {
     print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+
+    debugTokenizeZig();
 
     const source = try std.fs.cwd().readFileAlloc(allocator, "src/vex.vex", 1024 * 1024);
     defer allocator.free(source);
@@ -451,6 +767,13 @@ pub fn main() !void {
         if (c == '\n') {
             line += 1;
             i += 1;
+            continue;
+        }
+
+        // Line comments: // ...
+        if (c == '/' and i + 1 < source.len and source[i + 1] == '/') {
+            i += 2;
+            while (i < source.len and source[i] != '\n') : (i += 1) {}
             continue;
         }
 
@@ -593,9 +916,10 @@ pub fn main() !void {
 
     if (functions.get("main")) |main_func| {
         _ = main_func; // value unused, we just check existence
-        _ = runFunction("main", null, global_env);
+        _ = runFunction("main", null, null, null, global_env);
     }
 
     print("\n\nVEX JUST RAN YOUR CODE - NO LLVM - NO EXCUSES\n", .{});
     print("THE FINAL LANGUAGE IS ALIVE - RIGHT NOW\n", .{});
 }
+

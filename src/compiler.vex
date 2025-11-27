@@ -90,40 +90,384 @@ type ProgramAst = struct {
     functions: []FuncAst,
 }
 
-// Runtime environment for vex_eval: stores variables and functions.
-// In a future Vex stdlib this would be backed by proper hash maps.
+// Core-Vex friendly data structures (no generics or methods).
+type VarPair = struct { key: []u8, value: Value }
+type FuncPair = struct { key: []u8, value: FuncAst }
+
+type VarMap = struct { items: []VarPair, len: i64, cap: i64 }
+type FuncMap = struct { items: []FuncPair, len: i64, cap: i64 }
+
+type TokenList = struct { items: []Token, len: i64, cap: i64 }
+type ExprList = struct { items: []Expr, len: i64, cap: i64 }
+type StmtList = struct { items: []Stmt, len: i64, cap: i64 }
+type FuncList = struct { items: []FuncAst, len: i64, cap: i64 }
+
+fn str_eq(a: []u8, b: []u8) -> bool {
+    if str_len(a) != str_len(b) { return false }
+    let i: i64 = 0
+    while i < str_len(a) {
+        if str_char(a, i) != str_char(b, i) { return false }
+        i += 1
+    }
+    return true
+}
+
+fn is_kw_let(s: []u8) -> bool {
+    if str_char(s, 0) != 108 { return false }
+    if str_char(s, 1) != 101 { return false }
+    if str_char(s, 2) != 116 { return false }
+    if str_char(s, 3) != 0 { return false }
+    return true
+}
+
+fn is_kw_print(s: []u8) -> bool {
+    if str_char(s, 0) != 112 { return false }
+    if str_char(s, 1) != 114 { return false }
+    if str_char(s, 2) != 105 { return false }
+    if str_char(s, 3) != 110 { return false }
+    if str_char(s, 4) != 116 { return false }
+    if str_char(s, 5) != 0 { return false }
+    return true
+}
+
+fn var_map_init() -> VarMap {
+    let cap: i64 = 8
+    let pairs = malloc(cap * sizeof(VarPair))
+    return VarMap{ .items = pairs, .len = 0, .cap = cap }
+}
+
+fn var_map_grow(m: *VarMap) {
+    let new_cap = if m.cap == 0 { 8 } else { m.cap * 2 }
+    let new_items = malloc(new_cap * sizeof(VarPair))
+    if m.len > 0 {
+        memcpy(new_items, m.items, m.len * sizeof(VarPair))
+    }
+    m.items = new_items
+    m.cap = new_cap
+}
+
+fn var_map_get(m: *VarMap, key: []u8) -> ?Value {
+    for i in 0..m.len {
+        if str_eq(m.items[i].key, key) { return m.items[i].value }
+    }
+    return null
+}
+
+fn var_map_set(m: *VarMap, key: []u8, v: Value) {
+    for i in 0..m.len {
+        if str_eq(m.items[i].key, key) {
+            m.items[i].value = v
+            return
+        }
+    }
+    if m.len == m.cap { var_map_grow(m) }
+    m.items[m.len].key = key
+    m.items[m.len].value = v
+    m.len += 1
+}
+
+fn func_map_init() -> FuncMap {
+    let cap: i64 = 8
+    let pairs = malloc(cap * sizeof(FuncPair))
+    return FuncMap{ .items = pairs, .len = 0, .cap = cap }
+}
+
+fn func_map_grow(m: *FuncMap) {
+    let new_cap = if m.cap == 0 { 8 } else { m.cap * 2 }
+    let new_items = malloc(new_cap * sizeof(FuncPair))
+    if m.len > 0 {
+        memcpy(new_items, m.items, m.len * sizeof(FuncPair))
+    }
+    m.items = new_items
+    m.cap = new_cap
+}
+
+fn func_map_get(m: *FuncMap, key: []u8) -> ?FuncAst {
+    for i in 0..m.len {
+        if str_eq(m.items[i].key, key) { return m.items[i].value }
+    }
+    return null
+}
+
+fn func_map_set(m: *FuncMap, key: []u8, f: FuncAst) {
+    for i in 0..m.len {
+        if str_eq(m.items[i].key, key) {
+            m.items[i].value = f
+            return
+        }
+    }
+    if m.len == m.cap { func_map_grow(m) }
+    m.items[m.len].key = key
+    m.items[m.len].value = f
+    m.len += 1
+}
+
+fn token_list_init() -> TokenList {
+    let cap: i64 = 64
+    let items = malloc(cap * sizeof(Token))
+    return TokenList{ .items = items, .len = 0, .cap = cap }
+}
+
+fn token_list_push(list: *TokenList, t: Token) {
+    if list.len == list.cap {
+        let new_cap = if list.cap == 0 { 64 } else { list.cap * 2 }
+        let new_items = malloc(new_cap * sizeof(Token))
+        if list.len > 0 {
+            memcpy(new_items, list.items, list.len * sizeof(Token))
+        }
+        list.items = new_items
+        list.cap = new_cap
+    }
+    list.items[list.len] = t
+    list.len += 1
+}
+
+fn token_list_finish(list: TokenList) -> []Token {
+    return list.items[0..list.len]
+}
+
+fn expr_list_init() -> ExprList {
+    let cap: i64 = 8
+    let items = malloc(cap * sizeof(Expr))
+    return ExprList{ .items = items, .len = 0, .cap = cap }
+}
+
+fn expr_list_push(list: *ExprList, e: Expr) {
+    if list.len == list.cap {
+        let new_cap = if list.cap == 0 { 8 } else { list.cap * 2 }
+        let new_items = malloc(new_cap * sizeof(Expr))
+        if list.len > 0 {
+            memcpy(new_items, list.items, list.len * sizeof(Expr))
+        }
+        list.items = new_items
+        list.cap = new_cap
+    }
+    list.items[list.len] = e
+    list.len += 1
+}
+
+fn expr_list_finish(list: ExprList) -> []Expr {
+    return list.items[0..list.len]
+}
+
+fn empty_exprs() -> []Expr {
+    let list = expr_list_init()
+    return expr_list_finish(list)
+}
+
+fn stmt_list_init() -> StmtList {
+    let cap: i64 = 8
+    let items = malloc(cap * sizeof(Stmt))
+    return StmtList{ .items = items, .len = 0, .cap = cap }
+}
+
+fn stmt_list_push(list: *StmtList, s: Stmt) {
+    if list.len == list.cap {
+        let new_cap = if list.cap == 0 { 8 } else { list.cap * 2 }
+        let new_items = malloc(new_cap * sizeof(Stmt))
+        if list.len > 0 {
+            memcpy(new_items, list.items, list.len * sizeof(Stmt))
+        }
+        list.items = new_items
+        list.cap = new_cap
+    }
+    list.items[list.len] = s
+    list.len += 1
+}
+
+fn stmt_list_finish(list: StmtList) -> []Stmt {
+    return list.items[0..list.len]
+}
+
+fn empty_stmts() -> []Stmt {
+    let list = stmt_list_init()
+    return stmt_list_finish(list)
+}
+
+fn func_list_init() -> FuncList {
+    let cap: i64 = 4
+    let items = malloc(cap * sizeof(FuncAst))
+    return FuncList{ .items = items, .len = 0, .cap = cap }
+}
+
+fn func_list_push(list: *FuncList, f: FuncAst) {
+    if list.len == list.cap {
+        let new_cap = if list.cap == 0 { 4 } else { list.cap * 2 }
+        let new_items = malloc(new_cap * sizeof(FuncAst))
+        if list.len > 0 {
+            memcpy(new_items, list.items, list.len * sizeof(FuncAst))
+        }
+        list.items = new_items
+        list.cap = new_cap
+    }
+    list.items[list.len] = f
+    list.len += 1
+}
+
+fn func_list_finish(list: FuncList) -> []FuncAst {
+    return list.items[0..list.len]
+}
+
+// --- Minimal token kinds for mini self-hosting demos ---
+type MiniTokenKind = enum { Ident, Int, Let, Print, Plus, LParen, RParen, Eof }
+type MiniToken = struct { kind: MiniTokenKind, text: []u8 }
+type MiniTokenList = struct { items: []MiniToken, len: i64, cap: i64 }
+
+fn mini_token_list_init() -> MiniTokenList {
+    let cap: i64 = 16
+    let buf = malloc(cap * sizeof(MiniToken))
+    return MiniTokenList{ .items = buf, .len = 0, .cap = cap }
+}
+
+fn mini_token_list_push(list: *MiniTokenList, t: MiniToken) {
+    if list.len == list.cap {
+        let new_cap = list.cap * 2
+        let new_buf = malloc(new_cap * sizeof(MiniToken))
+        let i: i64 = 0
+        while i < list.len {
+            new_buf[i] = list.items[i]
+            i += 1
+        }
+        list.items = new_buf
+        list.cap = new_cap
+    }
+    list.items[list.len] = t
+    list.len += 1
+}
+
+fn mini_token_list_finish(list: MiniTokenList) -> []MiniToken {
+    return list.items[0..list.len]
+}
+
+fn token_kind_to_string(k: MiniTokenKind) -> []u8 {
+    if k == .Let { return "Let" }
+    if k == .Print { return "Print" }
+    if k == .Ident { return "Ident" }
+    if k == .Int { return "Int" }
+    if k == .Plus { return "Plus" }
+    if k == .LParen { return "LParen" }
+    if k == .RParen { return "RParen" }
+    if k == .Eof { return "Eof" }
+    return "Unknown"
+}
+
+fn vex_tokenize(src: []u8) -> []MiniToken {
+    let tokens = mini_token_list_init()
+    let i: i64 = 0
+    return vex_tokenize_loop(src, i, tokens)
+}
+
+fn vex_tokenize_loop(src: []u8, i: i64, list: MiniTokenList) -> []MiniToken {
+    if str_len(src) <= i {
+        mini_token_list_push(&list, MiniToken{ .kind = .Eof, .text = "" })
+        return mini_token_list_finish(list)
+    }
+
+    let c = str_char(src, i)
+
+    if is_space(c) {
+        return vex_tokenize_loop(src, i + 1, list)
+    }
+
+    if is_alpha(c) or (c == 95) {
+        let start = i
+        let j = vex_consume_ident(src, i)
+        let text = str_slice(src, start, j)
+        let kind = if is_kw_let(text) { .Let }
+            else if is_kw_print(text) { .Print }
+            else { .Ident }
+        mini_token_list_push(&list, MiniToken{ .kind = kind, .text = text })
+        return vex_tokenize_loop(src, j, list)
+    }
+
+    if is_digit(c) {
+        let start = i
+        let j = vex_consume_digits(src, i)
+        let text = str_slice(src, start, j)
+        mini_token_list_push(&list, MiniToken{ .kind = .Int, .text = text })
+        return vex_tokenize_loop(src, j, list)
+    }
+
+    if c == 43 {
+        mini_token_list_push(&list, MiniToken{ .kind = .Plus, .text = "+" })
+        return vex_tokenize_loop(src, i + 1, list)
+    }
+    if c == 40 {
+        mini_token_list_push(&list, MiniToken{ .kind = .LParen, .text = "(" })
+        return vex_tokenize_loop(src, i + 1, list)
+    }
+    if c == 41 {
+        mini_token_list_push(&list, MiniToken{ .kind = .RParen, .text = ")" })
+        return vex_tokenize_loop(src, i + 1, list)
+    }
+
+    panic("unexpected char")
+    return list.items
+}
+
+fn vex_consume_ident(src: []u8, i: i64) -> i64 {
+    if str_len(src) <= i { return i }
+    let c = str_char(src, i)
+    if is_alpha(c) { return vex_consume_ident(src, i + 1) }
+    if is_digit(c) { return vex_consume_ident(src, i + 1) }
+    if c == 95 { return vex_consume_ident(src, i + 1) }
+    return i
+}
+
+fn vex_consume_digits(src: []u8, i: i64) -> i64 {
+    if str_len(src) <= i { return i }
+    let c = str_char(src, i)
+    if is_digit(c) { return vex_consume_digits(src, i + 1) }
+    return i
+}
+
+fn debug_tokens() -> i64 {
+    let src = "let x = 42\nprint(x + 3)\n"
+    let toks = vex_tokenize(src)
+    print("vex_tokenize:\n")
+    let idx: i64 = 0
+    while idx < toks.len {
+        let t = toks[idx]
+        print("tok:{token_kind_to_string(t.kind)}:{t.text}\n")
+        idx += 1
+    }
+    return 0
+}
+// Runtime environment for vex_eval using linear maps above.
 type Env = struct {
     parent: ?*Env,
-    vars: Map[[]u8, Value],
-    funcs: Map[[]u8, FuncAst],
+    vars: VarMap,
+    funcs: FuncMap,
 }
 
 fn env_new(parent: ?*Env) -> *Env {
-    let e = new Env
+    let e = malloc(sizeof(Env))
     e.parent = parent
-    e.vars = Map[[]u8, Value]{}
-    e.funcs = Map[[]u8, FuncAst]{}
+    e.vars = var_map_init()
+    e.funcs = func_map_init()
     return e
 }
 
 fn env_get_var(env: *Env, name: []u8) -> ?Value {
-    if (env.vars.contains(name)) return env.vars[name]
+    let v = var_map_get(&env.vars, name)
+    if v != null { return v }
     if (env.parent != null) return env_get_var(env.parent, name)
     return null
 }
 
 fn env_set_var(env: *Env, name: []u8, v: Value) {
-    env.vars[name] = v
+    var_map_set(&env.vars, name, v)
 }
 
 fn env_get_func(env: *Env, name: []u8) -> ?FuncAst {
-    if (env.funcs.contains(name)) return env.funcs[name]
+    let f = func_map_get(&env.funcs, name)
+    if f != null { return f }
     if (env.parent != null) return env_get_func(env.parent, name)
     return null
 }
 
 fn env_set_func(env: *Env, name: []u8, f: FuncAst) {
-    env.funcs[name] = f
+    func_map_set(&env.funcs, name, f)
 }
 
 fn is_space(c: u8) -> bool {
@@ -141,7 +485,7 @@ fn is_digit(c: u8) -> bool {
 // First real compiler function written in Vex: a lexer that
 // conceptually matches the one in bootstrap/main.zig.
 fn vex_tokenize(src: []u8) -> []Token {
-    let tokens = []Token{}      // dynamic growable buffer in future Vex std
+    let tokens = token_list_init()
     let i: usize = 0
     let line: i32 = 1
     let col: i32 = 1
@@ -175,12 +519,23 @@ fn vex_tokenize(src: []u8) -> []Token {
                 i += 1
                 col += 1
             }
-            tokens.append(Token{
+            token_list_push(&tokens, Token{
                 .kind = .string,
                 .text = src[start..i],
                 .line = line,
                 .col = col,
             })
+            continue
+        }
+
+        // line comments: // ...
+        if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
+            i += 2
+            col += 2
+            while (i < src.len and src[i] != '\n') {
+                i += 1
+                col += 1
+            }
             continue
         }
 
@@ -195,7 +550,7 @@ fn vex_tokenize(src: []u8) -> []Token {
                 else if (c == '*') .star else if (c == '/') .slash
                 else .equal
 
-            tokens.append(Token{
+            token_list_push(&tokens, Token{
                 .kind = kind,
                 .text = src[i..i+1],
                 .line = line,
@@ -210,7 +565,7 @@ fn vex_tokenize(src: []u8) -> []Token {
         if (is_digit(c)) {
             let start = i
             while (i < src.len and is_digit(src[i])) { i += 1; col += 1 }
-            tokens.append(Token{
+            token_list_push(&tokens, Token{
                 .kind = .integer,
                 .text = src[start..i],
                 .line = line,
@@ -234,7 +589,7 @@ fn vex_tokenize(src: []u8) -> []Token {
                 else if (word == "accel") .keyword_accel
                 else .identifier
 
-            tokens.append(Token{
+            token_list_push(&tokens, Token{
                 .kind = kind,
                 .text = word,
                 .line = line,
@@ -248,14 +603,14 @@ fn vex_tokenize(src: []u8) -> []Token {
         col += 1
     }
 
-    tokens.append(Token{
+    token_list_push(&tokens, Token{
         .kind = .eof,
         .text = "",
         .line = line,
         .col = col,
     })
 
-    return tokens      // future: this becomes a real slice
+    return token_list_finish(tokens)
 }
 
 // --- Pratt parser foundation (expression-level) ---
@@ -279,7 +634,7 @@ fn prefix_expr() Expr {
             .right = null,
             .op = null,
             .callee = null,
-            .args = []Expr{},
+            .args = empty_exprs(),
         };
     }
 
@@ -292,7 +647,7 @@ fn prefix_expr() Expr {
             .right = null,
             .op = null,
             .callee = null,
-            .args = []Expr{},
+            .args = empty_exprs(),
         };
     }
 
@@ -310,7 +665,7 @@ fn prefix_expr() Expr {
         .right = null,
         .op = null,
         .callee = null,
-        .args = []Expr{},
+        .args = empty_exprs(),
     };
 }
 
@@ -360,7 +715,7 @@ fn parse_expr(min_bp: i32) -> Expr {
             .right = boxed_rhs,
             .op = op_tok.kind,
             .callee = null,
-            .args = []Expr{},
+            .args = empty_exprs(),
         };
     }
 
@@ -370,11 +725,11 @@ fn parse_expr(min_bp: i32) -> Expr {
         if (lhs.kind != .name) break;
 
         _ = p_advance(); // '('
-        let args = []Expr{};
+        let args = expr_list_init();
         if (p_peek().kind != .r_paren) {
             while (true) {
                 let arg = parse_expr(0);
-                args.append(arg);
+                expr_list_push(&args, arg);
                 if (p_peek().kind == .r_paren) break;
                 // assume comma-separated in the future
             }
@@ -388,7 +743,7 @@ fn parse_expr(min_bp: i32) -> Expr {
             .right = null,
             .op = null,
             .callee = lhs_token_text(lhs), // helper for name text
-            .args = args,
+            .args = expr_list_finish(args),
         };
     }
 
@@ -404,7 +759,7 @@ fn lhs_token_text(e: Expr) -> []u8 {
 // --- Statement-level parsing for function bodies ---
 
 fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
-    let stmts = []Stmt{};
+    let stmts = stmt_list_init();
     let i: usize = start;
 
     while (i <= end and tokens[i].kind != .eof) {
@@ -423,12 +778,12 @@ fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
             let expr = parse_expr(0);
             i = p_pos;
 
-            stmts.append(Stmt{
+            stmt_list_push(&stmts, Stmt{
                 .kind = .let_decl,
                 .name = name_tok.text,
                 .expr = expr,
-                .then_body = []Stmt{},
-                .else_body = []Stmt{},
+                .then_body = empty_stmts(),
+                .else_body = empty_stmts(),
             });
             continue;
         }
@@ -440,12 +795,12 @@ fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
             let expr = parse_expr(0);
             i = p_pos;
 
-            stmts.append(Stmt{
+            stmt_list_push(&stmts, Stmt{
                 .kind = .return_stmt,
                 .name = null,
                 .expr = expr,
-                .then_body = []Stmt{},
-                .else_body = []Stmt{},
+                .then_body = empty_stmts(),
+                .else_body = empty_stmts(),
             });
             continue;
         }
@@ -471,12 +826,12 @@ fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
                 let then_end = if (i > 0) i - 2 else then_start;
                 let then_body = vex_parse_body(tokens, then_start, then_end);
 
-                stmts.append(Stmt{
+                stmt_list_push(&stmts, Stmt{
                     .kind = .if_stmt,
                     .name = null,
                     .expr = cond,
                     .then_body = then_body,
-                    .else_body = []Stmt{},
+                    .else_body = empty_stmts(),
                 });
                 continue;
             }
@@ -488,16 +843,16 @@ fn vex_parse_body(tokens: []Token, start: usize, end: usize) -> []Stmt {
         let expr = parse_expr(0);
         i = p_pos;
 
-        stmts.append(Stmt{
+        stmt_list_push(&stmts, Stmt{
             .kind = .expr_stmt,
             .name = null,
             .expr = expr,
-            .then_body = []Stmt{},
-            .else_body = []Stmt{},
+            .then_body = empty_stmts(),
+            .else_body = empty_stmts(),
         });
     }
 
-    return stmts;
+    return stmt_list_finish(stmts);
 }
 
 // --- Vex-side evaluator over the AST ---
@@ -518,7 +873,10 @@ fn eval_expr(e: Expr, env: *Env) -> Value {
     if (e.kind == .name) {
         let tok = p_tokens[e.token_index];
         let v = env_get_var(env, tok.text);
-        return v orelse 0;
+        if (v == null) {
+            panic("undefined var");
+        }
+        return v;
     }
 
     if (e.kind == .binary) {
@@ -535,7 +893,7 @@ fn eval_expr(e: Expr, env: *Env) -> Value {
 
     if (e.kind == .call) {
         let f = env_get_func(env, e.callee);
-        if (f == null) return 0;
+        if (f == null) panic("undefined function");
 
         let call_env = env_new(env);
         if (f.param_name != null and e.args.len > 0) {
@@ -609,7 +967,7 @@ fn vex_eval(program: ProgramAst) -> Value {
 // declarations and their statement bodies, mirroring the logic the Zig
 // interpreter currently uses.
 fn vex_parse(tokens: []Token) -> ProgramAst {
-    let funcs = []FuncAst{}      // growable buffer in future Vex std
+    let funcs = func_list_init()      // growable buffer in Core Vex style
     let i: usize = 0
 
     while (i < tokens.len and tokens[i].kind != .eof) {
@@ -671,7 +1029,7 @@ fn vex_parse(tokens: []Token) -> ProgramAst {
         let body_end = if (i > 0) i - 1 else 0
         let body = vex_parse_body(tokens, body_start, body_end)
 
-        funcs.append(FuncAst{
+        func_list_push(&funcs, FuncAst{
             .name = name_tok.text,
             .param_name = param_name,
             .body_start = body_start,
@@ -681,7 +1039,7 @@ fn vex_parse(tokens: []Token) -> ProgramAst {
         })
     }
 
-    return ProgramAst{ .functions = funcs }
+    return ProgramAst{ .functions = func_list_finish(funcs) }
 }
 
 comptime {

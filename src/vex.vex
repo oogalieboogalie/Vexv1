@@ -5,10 +5,179 @@ fn fib(n: i64) -> i64 {
 }
 
 fn main() {
-    let n = 16
-    let result = fib(n)
+    let e = env_create()
+    env_set(e, "test_key", 123)
+    let val = env_find(e, "test_key")
 
-    print("fib({n}) = {result}\n")
-    print("Vex just ran real recursion on November 25, 2025\n")
-    print("Driven by a pure Vex interpreter — no LLVM, no C.\n")
+    print("fib(16) = {fib(16)}\n")
+    print("env test: {val}\n")
+
+    // Mini tokenizer demo (enable when interpreter supports it cleanly)
+    demo_tokenize("let x = 42; print(x + 3) // comment should be ignored")
+    // Vex-side tokenizer (Core Vex).
+    vex_debug_tokens()
+}
+
+fn is_digit(c: i64) -> i64 {
+    if c < 48 { return 0 }
+    if c < 58 { return 1 }
+    return 0
+}
+
+fn is_alpha(c: i64) -> i64 {
+    if c < 65 { return 0 }
+    if c < 91 { return 1 } // A-Z
+    if c < 95 { return 0 }
+    if c < 96 { return 1 } // underscore
+    if c < 97 { return 0 }
+    if c < 123 { return 1 } // a-z
+    return 0
+}
+
+fn eq(a, b: i64) -> i64 {
+    if a < b { return 0 }
+    if b < a { return 0 }
+    return 1
+}
+
+fn str_eq(a: []u8, b: []u8) -> i64 {
+    if str_len(a) != str_len(b) { return 0 }
+    let i = 0
+    while i < str_len(a) {
+        if str_char(a, i) != str_char(b, i) { return 0 }
+        i += 1
+    }
+    return 1
+}
+
+fn is_kw_let(s: []u8) -> i64 {
+    if str_char(s, 0) != 108 { return 0 } // l
+    if str_char(s, 1) != 101 { return 0 } // e
+    if str_char(s, 2) != 116 { return 0 } // t
+    if str_char(s, 3) != 0 { return 0 }
+    return 1
+}
+
+fn is_kw_print(s: []u8) -> i64 {
+    if str_char(s, 0) != 112 { return 0 } // p
+    if str_char(s, 1) != 114 { return 0 } // r
+    if str_char(s, 2) != 105 { return 0 } // i
+    if str_char(s, 3) != 110 { return 0 } // n
+    if str_char(s, 4) != 116 { return 0 } // t
+    if str_char(s, 5) != 0 { return 0 }
+    return 1
+}
+
+fn demo_tokenize(src) -> i64 {
+    let i = 0
+    return tokenize_loop(src, i)
+}
+
+fn tokenize_loop(src, i: i64) -> i64 {
+    if str_len(src) <= i {
+        print("tok:Eof:\n")
+        return 0
+    }
+
+    let c = str_char(src, i)
+
+    // skip whitespace
+    if c < 33 { // treat control + space as whitespace
+        return tokenize_loop(src, i + 1)
+    }
+
+    // skip comments //
+    if eq(c, 47) {
+        if i + 1 < str_len(src) {
+            let next = str_char(src, i + 1)
+            if eq(next, 47) { return skip_comment(src, i + 2) }
+        }
+    }
+
+    // numbers
+    if is_digit(c) {
+        let start = i
+        let j = consume_digits(src, i)
+        let s = str_slice(src, start, j)
+        print("tok:Int:")
+        print(s)
+        print("\n")
+        return tokenize_loop(src, j)
+    }
+
+    // identifiers
+    if is_alpha(c) {
+        let start = i
+        let j = consume_ident(src, i)
+        let len = j - start
+
+        // Debug length
+        print("DBG ident len=")
+        print(len)
+        print("\n")
+
+        if len <= 3 {
+            if len <= 2 {
+                // not "let"
+            } else {
+                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 {
+                    print("tok:Let:let\n")
+                    return tokenize_loop(src, j)
+                }
+            }
+        } else if len <= 5 {
+            if len <= 4 {
+                // not "print"
+            } else {
+                if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 {
+                    print("tok:Print:print\n")
+                    return tokenize_loop(src, j)
+                }
+            }
+        }
+
+        print("tok:Ident:")
+        print(str_slice(src, start, j))
+        print("\n")
+        return tokenize_loop(src, j)
+    }
+
+    // single-char tokens we care about today
+    if eq(c, 40) { print("tok:LParen:(\n"); return tokenize_loop(src, i + 1) }
+    if eq(c, 41) { print("tok:RParen:)\n"); return tokenize_loop(src, i + 1) }
+    if eq(c, 43) { print("tok:Plus:+\n"); return tokenize_loop(src, i + 1) }
+    if eq(c, 45) { print("tok:Minus:-\n"); return tokenize_loop(src, i + 1) }
+    if eq(c, 42) { print("tok:Star:*\n"); return tokenize_loop(src, i + 1) }
+    if eq(c, 47) { print("tok:Slash:/\n"); return tokenize_loop(src, i + 1) }
+
+    // unknown char: skip
+    return tokenize_loop(src, i + 1)
+}
+
+fn consume_digits(src, i: i64) -> i64 {
+    if str_len(src) <= i { return i }
+    let c = str_char(src, i)
+    if is_digit(c) { return consume_digits(src, i + 1) }
+    return i
+}
+
+fn consume_ident(src, i: i64) -> i64 {
+    if str_len(src) <= i { return i }
+    let c = str_char(src, i)
+    if is_alpha(c) { return consume_ident(src, i + 1) }
+    if is_digit(c) { return consume_ident(src, i + 1) }
+    return i
+}
+
+fn skip_comment(src, i: i64) -> i64 {
+    if str_len(src) <= i { return i }
+    if eq(str_char(src, i), 10) { return tokenize_loop(src, i + 1) }
+    return skip_comment(src, i + 1)
+}
+
+fn vex_debug_tokens() -> i64 {
+    let src = "let x = 42; print(x + 3)"
+    print("vex_tokenize:\n")
+    tokenize_loop(src, 0)
+    return 0
 }
