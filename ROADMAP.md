@@ -6,7 +6,7 @@ This is where we left off and where to go next.
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
   - Executes Core Vex: `let`, `print`, `fn`, up to 3 parameters, `return`, `if`, `while`.
-  - Operators: `+ - * /`, `< <=`, `== !=`, `and` / `or`.
+  - Operators: `+ - * /`, `< <= > >=`, `== !=`, `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
   - Has builtins for env, strings, lists, filesystem IO, and argv access.
@@ -14,7 +14,7 @@ This is where we left off and where to go next.
 - Core self-hosting compiler (`src/compiler_core.vex`):
   - `tokenize(src)` implemented in Vex.
   - Recursive-descent parser that builds a list-based AST.
-  - Wired into CLI: `vex lex <file.vex>` and `vex parse <file.vex> [dump]`.
+  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, and `vex eval <file.vex> [args...]`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
   - Defines `TokenKind` / `Token` matching the interpreter's lexer.
