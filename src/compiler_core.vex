@@ -742,6 +742,377 @@ fn parse_program(toks) {
     return prog
 }
 
+// --- Eval (Vex-in-Vex execution) ---
+
+fn ret_pair(did_return, value) {
+    let r = list_create()
+    list_push(r, did_return)
+    list_push(r, value)
+    return r
+}
+
+fn ret_did(r) { return list_get(r, 0) }
+fn ret_val(r) { return list_get(r, 1) }
+
+fn is_digit_char(c) {
+    if 47 < c and c < 58 { return 1 }
+    return 0
+}
+
+fn is_ident_char(c) {
+    if c == 95 { return 1 }
+    if 47 < c and c < 58 { return 1 }
+    if 64 < c and c < 91 { return 1 }
+    if 96 < c and c < 123 { return 1 }
+    return 0
+}
+
+fn eval_expr(expr, func_env, vals_env, defs_env, prog_args) {
+    let tag = list_get(expr, 0)
+
+    if tag == 300 { return list_get(expr, 1) }
+    if tag == 301 { return list_get(expr, 1) }
+    if tag == 302 {
+        let name = list_get(expr, 1)
+        return env_find(vals_env, name)
+    }
+
+    if tag == 303 {
+        let op = list_get(expr, 1)
+        let lhs = eval_expr(list_get(expr, 2), func_env, vals_env, defs_env, prog_args)
+        let rhs = eval_expr(list_get(expr, 3), func_env, vals_env, defs_env, prog_args)
+
+        if op == 18 { return lhs + rhs }
+        if op == 19 { return lhs - rhs }
+        if op == 20 { return lhs * rhs }
+        if op == 21 { return lhs / rhs }
+
+        if op == 22 {
+            let out = 0
+            if lhs < rhs { let out = 1 }
+            return out
+        }
+        if op == 23 {
+            let out = 0
+            if lhs <= rhs { let out = 1 }
+            return out
+        }
+        if op == 16 {
+            let out = 0
+            if lhs == rhs { let out = 1 }
+            return out
+        }
+        if op == 17 {
+            let out = 0
+            if lhs != rhs { let out = 1 }
+            return out
+        }
+        if op == 24 {
+            let out = 0
+            if lhs != 0 and rhs != 0 { let out = 1 }
+            return out
+        }
+        if op == 25 {
+            let out = 0
+            if lhs != 0 or rhs != 0 { let out = 1 }
+            return out
+        }
+
+        return 0
+    }
+
+    if tag == 304 {
+        let name = list_get(expr, 1)
+        let args = list_get(expr, 2)
+        return eval_call_expr(name, args, func_env, vals_env, defs_env, prog_args)
+    }
+
+    return 0
+}
+
+fn eval_arg_expr(args, idx, func_env, vals_env, defs_env, prog_args) {
+    let e = list_get(args, idx)
+    if e == 0 { return 0 }
+    return eval_expr(e, func_env, vals_env, defs_env, prog_args)
+}
+
+fn eval_user_func(func_node, a0, a1, a2, func_env, caller_vals, caller_defs, prog_args) {
+    let p1 = list_get(func_node, 2)
+    let p2 = list_get(func_node, 3)
+    let p3 = list_get(func_node, 4)
+    let body = list_get(func_node, 6)
+
+    let vals = env_create(caller_vals)
+    let defs = env_create(caller_defs)
+
+    if str_len(p1) != 0 {
+        env_set(vals, p1, a0)
+        env_set(defs, p1, 1)
+    }
+    if str_len(p2) != 0 {
+        env_set(vals, p2, a1)
+        env_set(defs, p2, 1)
+    }
+    if str_len(p3) != 0 {
+        env_set(vals, p3, a2)
+        env_set(defs, p3, 1)
+    }
+
+    let r = eval_block(body, func_env, vals, defs, prog_args)
+    if ret_did(r) != 0 { return ret_val(r) }
+    return 0
+}
+
+fn call3(name, a0, a1, a2, argc, func_env, vals_env, defs_env, prog_args) {
+    if str_eq(name, "env_create") { return env_create(a0) }
+    if str_eq(name, "env_set") {
+        env_set(a0, a1, a2)
+        return 0
+    }
+    if str_eq(name, "env_find") { return env_find(a0, a1) }
+
+    if str_eq(name, "str_len") { return str_len(a0) }
+    if str_eq(name, "str_char") { return str_char(a0, a1) }
+    if str_eq(name, "str_slice") { return str_slice(a0, a1, a2) }
+
+    if str_eq(name, "print_bytes") {
+        print_bytes(a0)
+        return 0
+    }
+    if str_eq(name, "print_char") {
+        print_char(a0)
+        return 0
+    }
+
+    if str_eq(name, "list_create") { return list_create() }
+    if str_eq(name, "list_push") {
+        list_push(a0, a1)
+        return 0
+    }
+    if str_eq(name, "list_len") { return list_len(a0) }
+    if str_eq(name, "list_get") { return list_get(a0, a1) }
+
+    if str_eq(name, "read_file") { return read_file(a0) }
+    if str_eq(name, "write_file") {
+        write_file(a0, a1)
+        return 0
+    }
+
+    if str_eq(name, "arg_len") { return list_len(prog_args) }
+    if str_eq(name, "arg_get") {
+        let idx = a0
+        let n = list_len(prog_args)
+        if idx < 0 { return "" }
+        if idx < n { return list_get(prog_args, idx) }
+        return ""
+    }
+
+    let func_node = env_find(func_env, name)
+    if func_node == 0 {
+        print("[undefined function] {name}\n")
+        return 0
+    }
+
+    return eval_user_func(func_node, a0, a1, a2, func_env, vals_env, defs_env, prog_args)
+}
+
+fn eval_call_expr(name, args, func_env, vals_env, defs_env, prog_args) {
+    let argc = list_len(args)
+    let use = argc
+    if 3 < use { let use = 3 }
+
+    let a0 = 0
+    let a1 = 0
+    let a2 = 0
+    if 0 < use { let a0 = eval_arg_expr(args, 0, func_env, vals_env, defs_env, prog_args) }
+    if 1 < use { let a1 = eval_arg_expr(args, 1, func_env, vals_env, defs_env, prog_args) }
+    if 2 < use { let a2 = eval_arg_expr(args, 2, func_env, vals_env, defs_env, prog_args) }
+
+    return call3(name, a0, a1, a2, use, func_env, vals_env, defs_env, prog_args)
+}
+
+fn render_string(func_env, vals_env, defs_env, prog_args, raw) {
+    let i = 0
+    let n = str_len(raw)
+    while i < n {
+        let c = str_char(raw, i)
+
+        if c == 123 {
+            let j = i + 1
+            while j < n and str_char(raw, j) != 125 { let j = j + 1 }
+
+            if j < n {
+                let expr = str_slice(raw, i + 1, j)
+                let k = 0
+                let elen = str_len(expr)
+
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+                let start_name = k
+                while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                let name = str_slice(expr, start_name, k)
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                let did_call = 0
+
+                // func call: {name(16)} or {name(x)}
+                if k < elen and str_char(expr, k) == 40 {
+                    let did_call = 1
+                    let k = k + 1
+                    while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                    let arg_val = 0
+                    let parsed_num = 0
+
+                    if k < elen and is_digit_char(str_char(expr, k)) != 0 {
+                        let start = k
+                        while k < elen and is_digit_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_val = parse_int(str_slice(expr, start, k))
+                        let parsed_num = 1
+                    }
+
+                    if parsed_num == 0 {
+                        let start = k
+                        while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_name = str_slice(expr, start, k)
+                        let arg_val = env_find(vals_env, arg_name)
+                    }
+
+                    let v = call3(name, arg_val, 0, 0, 1, func_env, vals_env, defs_env, prog_args)
+                    print(v)
+                }
+
+                // variable: {x}
+                if did_call == 0 {
+                    let def = env_find(defs_env, name)
+                    if def != 0 {
+                        let v = env_find(vals_env, name)
+                        print(v)
+                    }
+                    if def == 0 {
+                        print_char(123)
+                        print_bytes(name)
+                        print_char(125)
+                    }
+                }
+
+                let i = j + 1
+            }
+
+            if j >= n {
+                print_char(123)
+                let i = i + 1
+            }
+        }
+
+        if c != 123 {
+            let handled = 0
+            if c == 92 and (i + 1) < n and str_char(raw, i + 1) == 110 {
+                print_char(10)
+                let i = i + 2
+                let handled = 1
+            }
+            if handled == 0 {
+                print_char(c)
+                let i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
+    let tag = list_get(stmt, 0)
+
+    if tag == 102 { return eval_block(stmt, func_env, vals_env, defs_env, prog_args) }
+
+    if tag == 200 {
+        let name = list_get(stmt, 1)
+        let expr = list_get(stmt, 2)
+        let v = eval_expr(expr, func_env, vals_env, defs_env, prog_args)
+        if str_len(name) != 0 {
+            env_set(vals_env, name, v)
+            env_set(defs_env, name, 1)
+        }
+        return ret_pair(0, 0)
+    }
+
+    if tag == 201 {
+        let expr = list_get(stmt, 1)
+        if list_get(expr, 0) == 301 {
+            render_string(func_env, vals_env, defs_env, prog_args, list_get(expr, 1))
+        }
+        if list_get(expr, 0) != 301 {
+            let v = eval_expr(expr, func_env, vals_env, defs_env, prog_args)
+            print(v)
+        }
+        return ret_pair(0, 0)
+    }
+
+    if tag == 202 {
+        let expr = list_get(stmt, 1)
+        if expr == 0 { return ret_pair(1, 0) }
+        let v = eval_expr(expr, func_env, vals_env, defs_env, prog_args)
+        return ret_pair(1, v)
+    }
+
+    if tag == 203 {
+        let cond = eval_expr(list_get(stmt, 1), func_env, vals_env, defs_env, prog_args)
+        if cond != 0 {
+            return eval_block(list_get(stmt, 2), func_env, vals_env, defs_env, prog_args)
+        }
+        return ret_pair(0, 0)
+    }
+
+    if tag == 204 {
+        let cond_expr = list_get(stmt, 1)
+        let body = list_get(stmt, 2)
+        while eval_expr(cond_expr, func_env, vals_env, defs_env, prog_args) != 0 {
+            let r = eval_block(body, func_env, vals_env, defs_env, prog_args)
+            if ret_did(r) != 0 { return r }
+        }
+        return ret_pair(0, 0)
+    }
+
+    if tag == 205 {
+        eval_expr(list_get(stmt, 1), func_env, vals_env, defs_env, prog_args)
+        return ret_pair(0, 0)
+    }
+
+    return ret_pair(0, 0)
+}
+
+fn eval_block(block, func_env, vals_env, defs_env, prog_args) {
+    let stmts = list_get(block, 1)
+    let i = 0
+    let n = list_len(stmts)
+    while i < n {
+        let s = list_get(stmts, i)
+        let r = eval_stmt(s, func_env, vals_env, defs_env, prog_args)
+        if ret_did(r) != 0 { return r }
+        let i = i + 1
+    }
+    return ret_pair(0, 0)
+}
+
+fn eval_program(prog, prog_args) {
+    let funcs = list_get(prog, 1)
+    let func_env = env_create(0)
+
+    let i = 0
+    let n = list_len(funcs)
+    while i < n {
+        let f = list_get(funcs, i)
+        env_set(func_env, list_get(f, 1), f)
+        let i = i + 1
+    }
+
+    let vals = env_create(0)
+    let defs = env_create(0)
+
+    call3("main", 0, 0, 0, 0, func_env, vals, defs, prog_args)
+    return 0
+}
+
 fn indent(depth) {
     let i = 0
     while i < depth {
@@ -908,8 +1279,363 @@ fn dump_program_tree(prog) {
     return 0
 }
 
+// --- Vex-in-Vex execution (Core AST evaluator) ---
+
+fn ceval_ret_pair(did_return, value) {
+    let r = list_create()
+    list_push(r, did_return)
+    list_push(r, value)
+    return r
+}
+
+fn ceval_ret_did(r) { return list_get(r, 0) }
+fn ceval_ret_val(r) { return list_get(r, 1) }
+
+fn ceval_env_vals(envs) { return list_get(envs, 0) }
+fn ceval_env_defs(envs) { return list_get(envs, 1) }
+
+fn ceval_user_func(func_node, args, caller_envs) {
+    let parent_vals = ceval_env_vals(caller_envs)
+    let parent_defs = ceval_env_defs(caller_envs)
+
+    let vals = env_create(parent_vals)
+    let defs = env_create(parent_defs)
+
+    let p1 = list_get(func_node, 2)
+    let p2 = list_get(func_node, 3)
+    let p3 = list_get(func_node, 4)
+
+    let a0 = list_get(args, 0)
+    let a1 = list_get(args, 1)
+    let a2 = list_get(args, 2)
+
+    if str_len(p1) != 0 {
+        env_set(vals, p1, a0)
+        env_set(defs, p1, 1)
+    }
+    if str_len(p2) != 0 {
+        env_set(vals, p2, a1)
+        env_set(defs, p2, 1)
+    }
+    if str_len(p3) != 0 {
+        env_set(vals, p3, a2)
+        env_set(defs, p3, 1)
+    }
+
+    let envs = pair(vals, defs)
+    let r = ceval_block(list_get(func_node, 6), envs)
+    if ceval_ret_did(r) != 0 { return ceval_ret_val(r) }
+    return 0
+}
+
+fn ceval_call_value(name, args, envs) {
+    // Builtins
+    if str_eq(name, "env_create") { return env_create(list_get(args, 0)) }
+    if str_eq(name, "env_set") {
+        env_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
+    if str_eq(name, "env_find") { return env_find(list_get(args, 0), list_get(args, 1)) }
+
+    if str_eq(name, "str_len") { return str_len(list_get(args, 0)) }
+    if str_eq(name, "str_char") { return str_char(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "str_slice") { return str_slice(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+
+    if str_eq(name, "print_bytes") {
+        print_bytes(list_get(args, 0))
+        return 0
+    }
+    if str_eq(name, "print_char") {
+        print_char(list_get(args, 0))
+        return 0
+    }
+
+    if str_eq(name, "list_create") { return list_create() }
+    if str_eq(name, "list_push") {
+        list_push(list_get(args, 0), list_get(args, 1))
+        return 0
+    }
+    if str_eq(name, "list_len") { return list_len(list_get(args, 0)) }
+    if str_eq(name, "list_get") { return list_get(list_get(args, 0), list_get(args, 1)) }
+
+    if str_eq(name, "read_file") { return read_file(list_get(args, 0)) }
+    if str_eq(name, "write_file") {
+        write_file(list_get(args, 0), list_get(args, 1))
+        return 0
+    }
+
+    // Program args (provided by `ceval_program`)
+    if str_eq(name, "arg_len") { return list_len(ceval_args) }
+    if str_eq(name, "arg_get") {
+        let idx = list_get(args, 0)
+        let n = list_len(ceval_args)
+        if idx < 0 { return "" }
+        if idx < n { return list_get(ceval_args, idx) }
+        return ""
+    }
+
+    // User-defined
+    let func_node = env_find(ceval_funcs, name)
+    if func_node == 0 {
+        print("[undefined function] {name}\n")
+        return 0
+    }
+    return ceval_user_func(func_node, args, envs)
+}
+
+fn ceval_call(call_expr, envs) {
+    let name = list_get(call_expr, 1)
+    let arg_exprs = list_get(call_expr, 2)
+
+    let args = list_create()
+    let i = 0
+    let n = list_len(arg_exprs)
+    while i < n and i < 3 {
+        list_push(args, ceval_expr(list_get(arg_exprs, i), envs))
+        let i = i + 1
+    }
+    return ceval_call_value(name, args, envs)
+}
+
+fn ceval_expr(expr, envs) {
+    let tag = list_get(expr, 0)
+
+    if tag == 300 { return list_get(expr, 1) }
+    if tag == 301 { return list_get(expr, 1) }
+    if tag == 302 { return env_find(ceval_env_vals(envs), list_get(expr, 1)) }
+
+    if tag == 303 {
+        let op = list_get(expr, 1)
+        let lhs = ceval_expr(list_get(expr, 2), envs)
+        let rhs = ceval_expr(list_get(expr, 3), envs)
+
+        if op == 18 { return lhs + rhs }
+        if op == 19 { return lhs - rhs }
+        if op == 20 { return lhs * rhs }
+        if op == 21 { return lhs / rhs }
+
+        if op == 22 {
+            let out = 0
+            if lhs < rhs { let out = 1 }
+            return out
+        }
+        if op == 23 {
+            let out = 0
+            if lhs <= rhs { let out = 1 }
+            return out
+        }
+        if op == 16 {
+            let out = 0
+            if lhs == rhs { let out = 1 }
+            return out
+        }
+        if op == 17 {
+            let out = 0
+            if lhs != rhs { let out = 1 }
+            return out
+        }
+        if op == 24 {
+            let out = 0
+            if lhs != 0 and rhs != 0 { let out = 1 }
+            return out
+        }
+        if op == 25 {
+            let out = 0
+            if lhs != 0 or rhs != 0 { let out = 1 }
+            return out
+        }
+
+        return 0
+    }
+
+    if tag == 304 { return ceval_call(expr, envs) }
+    return 0
+}
+
+fn ceval_render_string(raw, envs) {
+    let vals_env = ceval_env_vals(envs)
+    let defs_env = ceval_env_defs(envs)
+
+    let i = 0
+    let n = str_len(raw)
+    while i < n {
+        let c = str_char(raw, i)
+
+        if c == 123 {
+            let j = i + 1
+            while j < n and str_char(raw, j) != 125 { let j = j + 1 }
+
+            if j < n {
+                let expr = str_slice(raw, i + 1, j)
+                let k = 0
+                let elen = str_len(expr)
+
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+                let start_name = k
+                while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                let name = str_slice(expr, start_name, k)
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                let did_call = 0
+
+                // func call: {name(16)} or {name(x)}
+                if k < elen and str_char(expr, k) == 40 {
+                    let did_call = 1
+                    let k = k + 1
+                    while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                    let arg_val = 0
+                    let parsed_num = 0
+
+                    if k < elen and is_digit_char(str_char(expr, k)) != 0 {
+                        let start = k
+                        while k < elen and is_digit_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_val = parse_int(str_slice(expr, start, k))
+                        let parsed_num = 1
+                    }
+
+                    if parsed_num == 0 {
+                        let start = k
+                        while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_name = str_slice(expr, start, k)
+                        let arg_val = env_find(vals_env, arg_name)
+                    }
+
+                    let args = list_create()
+                    list_push(args, arg_val)
+                    let v = ceval_call_value(name, args, envs)
+                    print(v)
+                }
+
+                // variable: {x}
+                if did_call == 0 {
+                    let def = env_find(defs_env, name)
+                    if def != 0 {
+                        let v = env_find(vals_env, name)
+                        print(v)
+                    }
+                    if def == 0 {
+                        print_char(123)
+                        print_bytes(name)
+                        print_char(125)
+                    }
+                }
+
+                let i = j + 1
+            }
+
+            if j >= n {
+                print_char(123)
+                let i = i + 1
+            }
+        }
+
+        if c != 123 {
+            let handled = 0
+            if c == 92 and (i + 1) < n and str_char(raw, i + 1) == 110 {
+                print_char(10)
+                let i = i + 2
+                let handled = 1
+            }
+            if handled == 0 {
+                print_char(c)
+                let i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+fn ceval_stmt(stmt, envs) {
+    let tag = list_get(stmt, 0)
+
+    if tag == 102 { return ceval_block(stmt, envs) }
+
+    if tag == 200 {
+        let name = list_get(stmt, 1)
+        let v = ceval_expr(list_get(stmt, 2), envs)
+        if str_len(name) != 0 {
+            env_set(ceval_env_vals(envs), name, v)
+            env_set(ceval_env_defs(envs), name, 1)
+        }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 201 {
+        let expr = list_get(stmt, 1)
+        if list_get(expr, 0) == 301 { ceval_render_string(list_get(expr, 1), envs) }
+        if list_get(expr, 0) != 301 { print(ceval_expr(expr, envs)) }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 202 {
+        let expr = list_get(stmt, 1)
+        if expr == 0 { return ceval_ret_pair(1, 0) }
+        return ceval_ret_pair(1, ceval_expr(expr, envs))
+    }
+
+    if tag == 203 {
+        if ceval_expr(list_get(stmt, 1), envs) != 0 {
+            return ceval_block(list_get(stmt, 2), envs)
+        }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 204 {
+        let cond_expr = list_get(stmt, 1)
+        let body = list_get(stmt, 2)
+        while ceval_expr(cond_expr, envs) != 0 {
+            let r = ceval_block(body, envs)
+            if ceval_ret_did(r) != 0 { return r }
+        }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 205 {
+        ceval_expr(list_get(stmt, 1), envs)
+        return ceval_ret_pair(0, 0)
+    }
+
+    return ceval_ret_pair(0, 0)
+}
+
+fn ceval_block(block, envs) {
+    let stmts = list_get(block, 1)
+    let i = 0
+    let n = list_len(stmts)
+    while i < n {
+        let r = ceval_stmt(list_get(stmts, i), envs)
+        if ceval_ret_did(r) != 0 { return r }
+        let i = i + 1
+    }
+    return ceval_ret_pair(0, 0)
+}
+
+fn ceval_program(prog, prog_args) {
+    let funcs = list_get(prog, 1)
+
+    let ceval_funcs = env_create(0)
+    let i = 0
+    let n = list_len(funcs)
+    while i < n {
+        let f = list_get(funcs, i)
+        env_set(ceval_funcs, list_get(f, 1), f)
+        let i = i + 1
+    }
+
+    let ceval_args = prog_args
+
+    let vals = env_create(0)
+    let defs = env_create(0)
+    let envs = pair(vals, defs)
+    let args = list_create()
+    ceval_call_value("main", args, envs)
+    return 0
+}
+
 fn main() {
     let do_parse = 0
+    let do_eval = 0
     let dump_tree = 0
     let path = "src/vex.vex"
     if 1 < arg_len() {
@@ -923,11 +1649,16 @@ fn main() {
             }
         }
 
-        if do_parse == 0 and str_eq(first, "lex") {
+        if str_eq(first, "eval") {
+            let do_eval = 1
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
-        if do_parse == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 {
+        if do_parse == 0 and do_eval == 0 and str_eq(first, "lex") {
+            if 2 < arg_len() { let path = arg_get(2) }
+        }
+
+        if do_parse == 0 and do_eval == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 {
             let path = first
         }
     }
@@ -939,6 +1670,19 @@ fn main() {
         let prog = parse_program(toks)
         if dump_tree == 1 { dump_program_tree(prog) }
         if dump_tree == 0 { dump_program_summary(prog) }
+        return
+    }
+
+    if do_eval == 1 {
+        let prog = parse_program(toks)
+        let prog_args = list_create()
+        list_push(prog_args, path)
+        let i = 3
+        while i < arg_len() {
+            list_push(prog_args, arg_get(i))
+            let i = i + 1
+        }
+        ceval_program(prog, prog_args)
         return
     }
 

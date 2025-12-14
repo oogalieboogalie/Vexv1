@@ -212,6 +212,8 @@ const Token = struct {
         slash,
         less,
         less_equal,
+        greater,
+        greater_equal,
         eof,
     };
 };
@@ -716,6 +718,18 @@ fn evalCompare(env: *Env) Value {
                 const rhs = expectInt(evalAdd(env));
                 result = makeInt(if (lhs <= rhs) 1 else 0);
             },
+            .greater => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalAdd(env));
+                result = makeInt(if (lhs > rhs) 1 else 0);
+            },
+            .greater_equal => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalAdd(env));
+                result = makeInt(if (lhs >= rhs) 1 else 0);
+            },
             else => return result,
         }
     }
@@ -1025,6 +1039,7 @@ pub fn main() !void {
                 \\  vex [--verbose|-v] run <file.vex> [args...]
                 \\  vex [--verbose|-v] lex <file.vex>
                 \\  vex [--verbose|-v] parse <file.vex> [dump]
+                \\  vex [--verbose|-v] eval <file.vex> [args...]
                 \\
                 \\Notes:
                 \\  - with no args, runs `src/vex.vex`
@@ -1057,6 +1072,20 @@ pub fn main() !void {
             file_path = compiler_script;
             script_args = args_buf;
         } else if (std.mem.eql(u8, cmd, "parse")) {
+            if (host_args.len <= argi + 1) {
+                print("error: missing file\n", .{});
+                return;
+            }
+
+            const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
+            const tail = host_args[argi..];
+            const args_buf = try allocator.alloc([]u8, tail.len + 1);
+            args_buf[0] = compiler_script;
+            for (tail, 0..) |arg, j| args_buf[j + 1] = arg;
+
+            file_path = compiler_script;
+            script_args = args_buf;
+        } else if (std.mem.eql(u8, cmd, "eval")) {
             if (host_args.len <= argi + 1) {
                 print("error: missing file\n", .{});
                 return;
@@ -1170,6 +1199,16 @@ pub fn main() !void {
                     i += 2;
                 } else {
                     try list.append(.{ .kind = .less, .text = source[i..i+1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '>' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .greater_equal, .text = source[i..i+2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .greater, .text = source[i..i+1], .line = line });
                     i += 1;
                 }
                 continue;
