@@ -87,6 +87,76 @@ fn builtinEnvFind(env_handle: Value, key: []const u8) ?Value {
     return null;
 }
 
+fn builtinPrintBytes(bytes: []const u8) void {
+    print("{s}", .{bytes});
+}
+
+fn builtinPrintChar(b: u8) void {
+    var buf: [1]u8 = .{b};
+    print("{s}", .{buf[0..1]});
+}
+
+const VexList = struct {
+    items: std.ArrayList(Value),
+};
+
+fn builtinListCreate() Value {
+    const list_ptr: *VexList = allocator.create(VexList) catch @panic("oom");
+    list_ptr.* = .{ .items = std.ArrayList(Value).init(allocator) };
+    return makeInt(@intCast(@intFromPtr(list_ptr)));
+}
+
+fn builtinListPush(list_handle: Value, value: Value) void {
+    if (isZeroInt(list_handle)) return;
+    const addr = @as(usize, @intCast(expectInt(list_handle)));
+    const list_ptr = @as(*VexList, @ptrFromInt(addr));
+    list_ptr.items.append(value) catch @panic("oom");
+}
+
+fn builtinListLen(list_handle: Value) Value {
+    if (isZeroInt(list_handle)) return makeInt(0);
+    const addr = @as(usize, @intCast(expectInt(list_handle)));
+    const list_ptr = @as(*VexList, @ptrFromInt(addr));
+    return makeInt(@intCast(list_ptr.items.items.len));
+}
+
+fn builtinListGet(list_handle: Value, idx_value: Value) Value {
+    if (isZeroInt(list_handle)) return makeInt(0);
+    const addr = @as(usize, @intCast(expectInt(list_handle)));
+    const list_ptr = @as(*VexList, @ptrFromInt(addr));
+    const idx_signed = expectInt(idx_value);
+    if (idx_signed < 0) return makeInt(0);
+    const idx: usize = @intCast(idx_signed);
+    if (idx >= list_ptr.items.items.len) return makeInt(0);
+    return list_ptr.items.items[idx];
+}
+
+fn builtinReadFile(path: []const u8) Value {
+    const bytes = std.fs.cwd().readFileAlloc(allocator, path, 16 * 1024 * 1024) catch @panic("read_file failed");
+    return .{ .str = bytes };
+}
+
+fn builtinWriteFile(path: []const u8, data: []const u8) void {
+    var file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch @panic("write_file: create failed");
+    defer file.close();
+    file.writeAll(data) catch @panic("write_file: write failed");
+}
+
+var script_args: [][]u8 = &[_][]u8{};
+var verbose: bool = false;
+
+fn builtinArgLen() Value {
+    return makeInt(@intCast(script_args.len));
+}
+
+fn builtinArgGet(idx_value: Value) Value {
+    const idx_signed = expectInt(idx_value);
+    if (idx_signed < 0) return .{ .str = "" };
+    const idx: usize = @intCast(idx_signed);
+    if (idx >= script_args.len) return .{ .str = "" };
+    return .{ .str = script_args[idx] };
+}
+
 const Env = struct {
     parent: ?*Env,
     map: std.StringHashMap(Value),
@@ -125,12 +195,17 @@ const Token = struct {
         keyword_fn,
         keyword_return,
         keyword_if,
+        keyword_while,
+        keyword_and,
+        keyword_or,
         keyword_accel,
         l_paren,
         r_paren,
         l_brace,
         r_brace,
         equal,
+        equal_equal,
+        bang_equal,
         plus,
         minus,
         star,
@@ -341,7 +416,9 @@ fn parseFunction(is_accel: bool) void {
     functions.put(func.name, func) catch @panic("oom");
 
     if (is_accel) {
-        print("[@accel] registered {s} (CPU stub now, GPU later)\n", .{func.name});
+        if (verbose) {
+            print("[@accel] registered {s} (CPU stub now, GPU later)\n", .{func.name});
+        }
     }
 }
 
@@ -358,6 +435,10 @@ fn runFunction(name: []const u8, arg1: ?Value, arg2: ?Value, arg3: ?Value, calle
     pos = 0;
 
     const local_env = Env.create(caller_env) catch @panic("oom");
+    defer {
+        local_env.map.deinit();
+        allocator.destroy(local_env);
+    }
 
     if (func.param_name) |param| {
         if (arg1) |a| {
@@ -411,7 +492,17 @@ fn evalPrimary(env: *Env) Value {
             std.mem.eql(u8, name, "env_find") or
             std.mem.eql(u8, name, "str_len") or
             std.mem.eql(u8, name, "str_char") or
-            std.mem.eql(u8, name, "str_slice"))
+            std.mem.eql(u8, name, "str_slice") or
+            std.mem.eql(u8, name, "print_bytes") or
+            std.mem.eql(u8, name, "print_char") or
+            std.mem.eql(u8, name, "list_create") or
+            std.mem.eql(u8, name, "list_push") or
+            std.mem.eql(u8, name, "list_len") or
+            std.mem.eql(u8, name, "list_get") or
+            std.mem.eql(u8, name, "read_file") or
+            std.mem.eql(u8, name, "write_file") or
+            std.mem.eql(u8, name, "arg_len") or
+            std.mem.eql(u8, name, "arg_get"))
         {
             _ = advance(); // identifier
             consume(.l_paren);
@@ -424,30 +515,20 @@ fn evalPrimary(env: *Env) Value {
                 if (peek().kind == .r_paren) consume(.r_paren);
                 return builtinEnvCreate(parent_handle);
             } else if (std.mem.eql(u8, name, "env_set")) {
-                // env_set(env_handle, "key", value)
+                // env_set(env_handle, key, value)
                 const env_handle = evalExpr(env);
-
-                // Next token should be a string literal key
-                const key_tok = peek();
-                if (key_tok.kind != .string) @panic("env_set: expected string key");
-                _ = advance();
-                const key_raw = key_tok.text;
-                const key = key_raw[1 .. key_raw.len - 1];
-
+                const key_val = evalExpr(env);
+                const key = expectStr(key_val);
                 const val = evalExpr(env);
                 if (peek().kind == .r_paren) consume(.r_paren);
 
                 builtinEnvSet(env_handle, key, val);
                 return makeInt(0);
             } else if (std.mem.eql(u8, name, "env_find")) {
-                // env_find(env_handle, "key")
+                // env_find(env_handle, key)
                 const env_handle = evalExpr(env);
-
-                const key_tok = peek();
-                if (key_tok.kind != .string) @panic("env_find: expected string key");
-                _ = advance();
-                const key_raw = key_tok.text;
-                const key = key_raw[1 .. key_raw.len - 1];
+                const key_val = evalExpr(env);
+                const key = expectStr(key_val);
 
                 if (peek().kind == .r_paren) consume(.r_paren);
 
@@ -482,6 +563,56 @@ fn evalPrimary(env: *Env) Value {
                 const ustart: usize = @intCast(start);
                 const uend: usize = @intCast(end);
                 return .{ .str = s[ustart..uend] };
+            } else if (std.mem.eql(u8, name, "print_bytes")) {
+                const s_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const s = expectStr(s_val);
+                builtinPrintBytes(s);
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "print_char")) {
+                const v = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const b: u8 = @intCast(expectInt(v));
+                builtinPrintChar(b);
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "list_create")) {
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinListCreate();
+            } else if (std.mem.eql(u8, name, "list_push")) {
+                const list_handle = evalExpr(env);
+                const v = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                builtinListPush(list_handle, v);
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "list_len")) {
+                const list_handle = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinListLen(list_handle);
+            } else if (std.mem.eql(u8, name, "list_get")) {
+                const list_handle = evalExpr(env);
+                const idx_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinListGet(list_handle, idx_val);
+            } else if (std.mem.eql(u8, name, "read_file")) {
+                const path_val = if (peek().kind != .r_paren) evalExpr(env) else Value{ .str = "" };
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const path = expectStr(path_val);
+                return builtinReadFile(path);
+            } else if (std.mem.eql(u8, name, "write_file")) {
+                const path_val = evalExpr(env);
+                const data_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                const path = expectStr(path_val);
+                const data = expectStr(data_val);
+                builtinWriteFile(path, data);
+                return makeInt(0);
+            } else if (std.mem.eql(u8, name, "arg_len")) {
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinArgLen();
+            } else if (std.mem.eql(u8, name, "arg_get")) {
+                const idx_val = evalExpr(env);
+                if (peek().kind == .r_paren) consume(.r_paren);
+                return builtinArgGet(idx_val);
             }
         }
 
@@ -544,7 +675,7 @@ fn evalTerm(env: *Env) Value {
     }
 }
 
-fn evalExpr(env: *Env) Value {
+fn evalAdd(env: *Env) Value {
     var result = evalTerm(env);
 
     while (true) {
@@ -562,21 +693,93 @@ fn evalExpr(env: *Env) Value {
                 const rhs = expectInt(evalTerm(env));
                 result = makeInt(lhs - rhs);
             },
+            else => return result,
+        }
+    }
+}
+
+fn evalCompare(env: *Env) Value {
+    var result = evalAdd(env);
+
+    while (true) {
+        const t = peek();
+        switch (t.kind) {
             .less => {
                 _ = advance();
                 const lhs = expectInt(result);
-                const rhs = expectInt(evalTerm(env));
+                const rhs = expectInt(evalAdd(env));
                 result = makeInt(if (lhs < rhs) 1 else 0);
             },
             .less_equal => {
                 _ = advance();
                 const lhs = expectInt(result);
-                const rhs = expectInt(evalTerm(env));
+                const rhs = expectInt(evalAdd(env));
                 result = makeInt(if (lhs <= rhs) 1 else 0);
             },
             else => return result,
         }
     }
+}
+
+fn evalEquality(env: *Env) Value {
+    var result = evalCompare(env);
+
+    while (true) {
+        const t = peek();
+        switch (t.kind) {
+            .equal_equal => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalCompare(env));
+                result = makeInt(if (lhs == rhs) 1 else 0);
+            },
+            .bang_equal => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalCompare(env));
+                result = makeInt(if (lhs != rhs) 1 else 0);
+            },
+            else => return result,
+        }
+    }
+}
+
+fn evalAnd(env: *Env) Value {
+    var result = evalEquality(env);
+
+    while (true) {
+        const t = peek();
+        switch (t.kind) {
+            .keyword_and => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalEquality(env));
+                result = makeInt(if (lhs != 0 and rhs != 0) 1 else 0);
+            },
+            else => return result,
+        }
+    }
+}
+
+fn evalOr(env: *Env) Value {
+    var result = evalAnd(env);
+
+    while (true) {
+        const t = peek();
+        switch (t.kind) {
+            .keyword_or => {
+                _ = advance();
+                const lhs = expectInt(result);
+                const rhs = expectInt(evalAnd(env));
+                result = makeInt(if (lhs != 0 or rhs != 0) 1 else 0);
+            },
+            else => return result,
+        }
+    }
+}
+
+fn evalExpr(env: *Env) Value {
+    return evalOr(env);
 }
 
 fn renderString(env: *Env, raw: []const u8) void {
@@ -693,6 +896,49 @@ fn evalStmt(env: *Env) ?Value {
                 }
             }
         },
+        .keyword_while => {
+            _ = advance(); // 'while'
+
+            const cond_start = pos;
+            var cond = expectInt(evalExpr(env));
+
+            const body_start = pos;
+            if (peek().kind != .l_brace) @panic("while: expected {");
+
+            var scan_pos: usize = body_start;
+            var depth: usize = 0;
+            while (scan_pos < tokens.len) : (scan_pos += 1) {
+                switch (tokens[scan_pos].kind) {
+                    .l_brace => depth += 1,
+                    .r_brace => {
+                        depth -= 1;
+                        if (depth == 0) {
+                            scan_pos += 1;
+                            break;
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            const body_end = scan_pos;
+            if (body_end <= body_start or tokens[body_end - 1].kind != .r_brace) {
+                @panic("while: unterminated block");
+            }
+
+            while (cond != 0) {
+                pos = body_start;
+                if (execBlock(env)) |ret| {
+                    pos = body_end;
+                    return ret;
+                }
+
+                pos = cond_start;
+                cond = expectInt(evalExpr(env));
+            }
+
+            pos = body_end;
+        },
         .l_brace => {
             // Skip stray brace tokens inside function bodies.
             _ = advance();
@@ -745,11 +991,81 @@ fn evalStmt(env: *Env) ?Value {
 }
 
 pub fn main() !void {
-    print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+    const host_args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, host_args);
 
-    debugTokenizeZig();
+    var argi: usize = 1;
+    if (host_args.len > 1 and (std.mem.eql(u8, host_args[1], "--verbose") or std.mem.eql(u8, host_args[1], "-v"))) {
+        verbose = true;
+        argi = 2;
+    }
 
-    const source = try std.fs.cwd().readFileAlloc(allocator, "src/vex.vex", 1024 * 1024);
+    var file_path: []const u8 = "src/vex.vex";
+
+    if (host_args.len <= argi) {
+        // Default demo program.
+        if (verbose) {
+            print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+        }
+
+        const file_buf = try allocator.dupe(u8, file_path);
+        const args_buf = try allocator.alloc([]u8, 1);
+        args_buf[0] = file_buf;
+        script_args = args_buf;
+        file_path = file_buf;
+    } else {
+        const cmd = host_args[argi];
+
+        if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
+            print(
+                \\vex - Vex bootstrap interpreter
+                \\
+                \\Usage:
+                \\  vex [--verbose|-v] <file.vex> [args...]
+                \\  vex [--verbose|-v] run <file.vex> [args...]
+                \\  vex [--verbose|-v] lex <file.vex>
+                \\
+                \\Notes:
+                \\  - with no args, runs `src/vex.vex`
+                \\  - `arg_get(0)` is the script path
+                \\  - `arg_get(1..)` are script arguments
+                \\
+            , .{});
+            return;
+        }
+
+        if (std.mem.eql(u8, cmd, "run")) {
+            if (host_args.len <= argi + 1) {
+                print("error: missing file\n", .{});
+                return;
+            }
+            file_path = host_args[argi + 1];
+            script_args = host_args[(argi + 1)..];
+        } else if (std.mem.eql(u8, cmd, "lex")) {
+            if (host_args.len <= argi + 1) {
+                print("error: missing file\n", .{});
+                return;
+            }
+
+            const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
+            const args_buf = try allocator.alloc([]u8, 2);
+            args_buf[0] = compiler_script;
+            args_buf[1] = host_args[argi + 1];
+
+            file_path = compiler_script;
+            script_args = args_buf;
+        } else {
+            // Treat as a file path.
+            file_path = cmd;
+            script_args = host_args[argi..];
+        }
+
+        if (verbose) {
+            print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+        }
+    }
+
+    const source = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
     defer allocator.free(source);
 
     var list = std.ArrayList(Token).init(allocator);
@@ -843,8 +1159,22 @@ pub fn main() !void {
                 continue;
             },
             '=' => {
-                try list.append(.{ .kind = .equal, .text = source[i..i+1], .line = line });
-                i += 1;
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .equal_equal, .text = source[i..i+2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .equal, .text = source[i..i+1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '!' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .bang_equal, .text = source[i..i+2], .line = line });
+                    i += 2;
+                } else {
+                    i += 1;
+                }
                 continue;
             },
             else => {},
@@ -873,6 +1203,9 @@ pub fn main() !void {
                 else if (std.mem.eql(u8, word, "fn")) .keyword_fn
                 else if (std.mem.eql(u8, word, "return")) .keyword_return
                 else if (std.mem.eql(u8, word, "if")) .keyword_if
+                else if (std.mem.eql(u8, word, "while")) .keyword_while
+                else if (std.mem.eql(u8, word, "and")) .keyword_and
+                else if (std.mem.eql(u8, word, "or")) .keyword_or
                 else if (std.mem.eql(u8, word, "accel")) .keyword_accel
                 else .identifier;
             try list.append(.{
@@ -907,7 +1240,7 @@ pub fn main() !void {
             .eof => {},
             else => {
                 _ = evalStmt(global_env);
-                if (peek().kind != .eof) {
+                if (verbose and peek().kind != .eof) {
                     print("\n", .{});
                 }
             },
@@ -919,7 +1252,8 @@ pub fn main() !void {
         _ = runFunction("main", null, null, null, global_env);
     }
 
-    print("\n\nVEX JUST RAN YOUR CODE - NO LLVM - NO EXCUSES\n", .{});
-    print("THE FINAL LANGUAGE IS ALIVE - RIGHT NOW\n", .{});
+    if (verbose) {
+        print("\n\nVEX JUST RAN YOUR CODE - NO LLVM - NO EXCUSES\n", .{});
+        print("THE FINAL LANGUAGE IS ALIVE - RIGHT NOW\n", .{});
+    }
 }
-

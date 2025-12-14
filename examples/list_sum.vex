@@ -1,0 +1,19 @@
+fn main() {
+    let xs = list_create()
+    list_push(xs, 10)
+    list_push(xs, 20)
+    list_push(xs, 30)
+
+    let n = list_len(xs)
+    print("n = {n}\n")
+
+    let i = 0
+    let sum = 0
+    while i < n {
+        let sum = sum + list_get(xs, i)
+        let i = i + 1
+    }
+
+    print("sum = {sum}\n")
+}
+

@@ -1,0 +1,232 @@
+// src/compiler_core.vex
+// Runnable "Day 1" self-hosting step: a Vex-written lexer that runs under the Zig bootstrap.
+
+fn consume_digits(src, i) {
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        if c < 48 { return i }
+        if c < 58 { let i = i + 1 }
+        if 57 < c { return i }
+    }
+    return i
+}
+
+fn consume_ident(src, i) {
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        let ok = 0
+        if c == 95 { let ok = 1 }
+        if ok == 0 and 47 < c and c < 58 { let ok = 1 }
+        if ok == 0 and 64 < c and c < 91 { let ok = 1 }
+        if ok == 0 and 96 < c and c < 123 { let ok = 1 }
+        if ok == 0 { return i }
+        let i = i + 1
+    }
+    return i
+}
+
+fn skip_line_comment(src, i) {
+    while i < str_len(src) {
+        if str_char(src, i) == 10 { return i + 1 }
+        let i = i + 1
+    }
+    return i
+}
+
+fn kind_name(k) {
+    if k == 0 { return "Eof" }
+    if k == 1 { return "Ident" }
+    if k == 2 { return "Int" }
+    if k == 3 { return "String" }
+    if k == 4 { return "Let" }
+    if k == 5 { return "Print" }
+    if k == 6 { return "Fn" }
+    if k == 7 { return "Return" }
+    if k == 8 { return "If" }
+    if k == 9 { return "While" }
+    if k == 10 { return "Accel" }
+    if k == 11 { return "LParen" }
+    if k == 12 { return "RParen" }
+    if k == 13 { return "LBrace" }
+    if k == 14 { return "RBrace" }
+    if k == 15 { return "Equal" }
+    if k == 16 { return "EqEq" }
+    if k == 17 { return "BangEq" }
+    if k == 18 { return "Plus" }
+    if k == 19 { return "Minus" }
+    if k == 20 { return "Star" }
+    if k == 21 { return "Slash" }
+    if k == 22 { return "Less" }
+    if k == 23 { return "LessEq" }
+    if k == 24 { return "And" }
+    if k == 25 { return "Or" }
+    return "Unknown"
+}
+
+fn tokenize(src) {
+    let toks = list_create()
+
+    let i = 0
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        let handled = 0
+
+        // whitespace (control + space)
+        if handled == 0 and c < 33 {
+            let i = i + 1
+            let handled = 1
+        }
+
+        // line comments: // ...
+        if handled == 0 and c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
+            let i = skip_line_comment(src, i + 2)
+            let handled = 1
+        }
+
+        // strings: " ... "
+        if handled == 0 and c == 34 {
+            let start = i
+            let i = i + 1
+            while i < n and str_char(src, i) != 34 {
+                let i = i + 1
+            }
+            if i < n { let i = i + 1 }
+            list_push(toks, 3)
+            list_push(toks, str_slice(src, start, i))
+            let handled = 1
+        }
+
+        // numbers
+        if handled == 0 and 47 < c and c < 58 {
+            let start = i
+            let i = consume_digits(src, i)
+            list_push(toks, 2)
+            list_push(toks, str_slice(src, start, i))
+            let handled = 1
+        }
+
+        // identifiers / keywords
+        if handled == 0 and (c == 95 or (64 < c and c < 91) or (96 < c and c < 123)) {
+            let start = i
+            let i = consume_ident(src, i)
+            let len = i - start
+
+            let kind = 1
+            if len == 2 {
+                if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 110 { let kind = 6 } // fn
+                if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 102 { let kind = 8 } // if
+                if str_char(src, start + 0) == 111 and str_char(src, start + 1) == 114 { let kind = 25 } // or
+            }
+            if kind == 1 and len == 3 {
+                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 110 and str_char(src, start + 2) == 100 { let kind = 24 } // and
+            }
+            if kind == 1 and len == 5 {
+                if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
+                if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
+            }
+            if kind == 1 and len == 6 {
+                if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
+            }
+
+            list_push(toks, kind)
+            list_push(toks, str_slice(src, start, i))
+            let handled = 1
+        }
+
+        // single/double-char tokens
+        if handled == 0 and c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; let handled = 1 }
+
+        if handled == 0 and c == 43 { list_push(toks, 18); list_push(toks, "+"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; let handled = 1 }
+
+        if handled == 0 and c == 60 {
+            let is_le = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_le = 1 }
+            }
+
+            if is_le == 1 {
+                list_push(toks, 23)
+                list_push(toks, "<=")
+                let i = i + 2
+            }
+            if is_le == 0 {
+                list_push(toks, 22)
+                list_push(toks, "<")
+                let i = i + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 61 {
+            let is_eqeq = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_eqeq = 1 }
+            }
+
+            if is_eqeq == 1 {
+                list_push(toks, 16)
+                list_push(toks, "==")
+                let i = i + 2
+            }
+            if is_eqeq == 0 {
+                list_push(toks, 15)
+                list_push(toks, "=")
+                let i = i + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 33 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                list_push(toks, 17)
+                list_push(toks, "!=")
+                let i = i + 2
+                let handled = 1
+            }
+        }
+
+        // unknown char: skip
+        if handled == 0 { let i = i + 1 }
+    }
+
+    list_push(toks, 0)
+    list_push(toks, "")
+    return toks
+}
+
+fn dump_tokens(toks, max) {
+    let limit = list_len(toks)
+    let max_entries = max * 2
+    if max_entries < limit { let limit = max_entries }
+
+    let i = 0
+    while i < limit {
+        let k = list_get(toks, i)
+        let txt = list_get(toks, i + 1)
+        print("tok:{kind_name(k)}:{txt}\n")
+        let i = i + 2
+    }
+}
+
+fn main() {
+    let path = "src/vex.vex"
+    if 1 < arg_len() { let path = arg_get(1) }
+    let src = read_file(path)
+    let toks = tokenize(src)
+
+    let total = list_len(toks) / 2
+    print("tokenized {path}\n")
+    print("tokens: {total}\n")
+    dump_tokens(toks, 20)
+}

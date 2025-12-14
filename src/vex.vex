@@ -12,9 +12,7 @@ fn main() {
     print("fib(16) = {fib(16)}\n")
     print("env test: {val}\n")
 
-    // Mini tokenizer demo (enable when interpreter supports it cleanly)
     demo_tokenize("let x = 42; print(x + 3) // comment should be ignored")
-    // Vex-side tokenizer (Core Vex).
     vex_debug_tokens()
 }
 
@@ -51,20 +49,20 @@ fn str_eq(a: []u8, b: []u8) -> i64 {
 }
 
 fn is_kw_let(s: []u8) -> i64 {
+    if str_len(s) != 3 { return 0 }
     if str_char(s, 0) != 108 { return 0 } // l
     if str_char(s, 1) != 101 { return 0 } // e
     if str_char(s, 2) != 116 { return 0 } // t
-    if str_char(s, 3) != 0 { return 0 }
     return 1
 }
 
 fn is_kw_print(s: []u8) -> i64 {
+    if str_len(s) != 5 { return 0 }
     if str_char(s, 0) != 112 { return 0 } // p
     if str_char(s, 1) != 114 { return 0 } // r
     if str_char(s, 2) != 105 { return 0 } // i
     if str_char(s, 3) != 110 { return 0 } // n
     if str_char(s, 4) != 116 { return 0 } // t
-    if str_char(s, 5) != 0 { return 0 }
     return 1
 }
 
@@ -98,9 +96,8 @@ fn tokenize_loop(src, i: i64) -> i64 {
     if is_digit(c) {
         let start = i
         let j = consume_digits(src, i)
-        let s = str_slice(src, start, j)
         print("tok:Int:")
-        print(s)
+        print_bytes(str_slice(src, start, j))
         print("\n")
         return tokenize_loop(src, j)
     }
@@ -111,33 +108,17 @@ fn tokenize_loop(src, i: i64) -> i64 {
         let j = consume_ident(src, i)
         let len = j - start
 
-        // Debug length
-        print("DBG ident len=")
-        print(len)
-        print("\n")
-
-        if len <= 3 {
-            if len <= 2 {
-                // not "let"
-            } else {
-                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 {
-                    print("tok:Let:let\n")
-                    return tokenize_loop(src, j)
-                }
-            }
-        } else if len <= 5 {
-            if len <= 4 {
-                // not "print"
-            } else {
-                if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 {
-                    print("tok:Print:print\n")
-                    return tokenize_loop(src, j)
-                }
-            }
+        if len == 3 and str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 {
+            print("tok:Let:let\n")
+            return tokenize_loop(src, j)
+        }
+        if len == 5 and str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 {
+            print("tok:Print:print\n")
+            return tokenize_loop(src, j)
         }
 
         print("tok:Ident:")
-        print(str_slice(src, start, j))
+        print_bytes(str_slice(src, start, j))
         print("\n")
         return tokenize_loop(src, j)
     }
@@ -173,6 +154,12 @@ fn skip_comment(src, i: i64) -> i64 {
     if str_len(src) <= i { return i }
     if eq(str_char(src, i), 10) { return tokenize_loop(src, i + 1) }
     return skip_comment(src, i + 1)
+}
+
+fn print_slice(src, start, end: i64) -> i64 {
+    let s = str_slice(src, start, end)
+    print_bytes(s)
+    return 0
 }
 
 fn vex_debug_tokens() -> i64 {

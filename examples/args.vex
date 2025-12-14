@@ -1,0 +1,12 @@
+fn main() {
+    let argc = arg_len()
+    print("argc = {argc}\n")
+
+    let i = 0
+    while i < argc {
+        let a = arg_get(i)
+        print("arg {i} = {a}\n")
+        let i = i + 1
+    }
+}
+
