@@ -204,6 +204,7 @@ const Token = struct {
         r_paren,
         l_brace,
         r_brace,
+        dot,
         equal,
         equal_equal,
         bang_equal,
@@ -239,6 +240,7 @@ fn tokenKindLabel(k: Token.Kind) []const u8 {
         .plus => "Plus",
         .l_paren => "LParen",
         .r_paren => "RParen",
+        .dot => "Dot",
         .eof => "Eof",
         else => "Other",
     };
@@ -459,6 +461,16 @@ fn runFunction(name: []const u8, args: []const Value, caller_env: *Env) Value {
 fn evalPrimary(env: *Env) Value {
     const t = peek();
 
+    // dot literal: .name -> "name"
+    if (t.kind == .dot) {
+        _ = advance(); // '.'
+        const name_tok = advance();
+        if (name_tok.kind != .identifier) @panic("dot literal: expected identifier");
+        return .{ .str = name_tok.text };
+    }
+
+    var result: Value = undefined;
+
     // function call: name(...)
     if (t.kind == .identifier and pos + 1 < tokens.len and tokens[pos + 1].kind == .l_paren) {
         const name = t.text;
@@ -478,28 +490,34 @@ fn evalPrimary(env: *Env) Value {
         // Built-ins live here for now.
         if (std.mem.eql(u8, name, "env_create")) {
             const parent_handle: ?Value = if (args.len > 0) args[0] else null;
-            return builtinEnvCreate(parent_handle);
+            result = builtinEnvCreate(parent_handle);
         } else if (std.mem.eql(u8, name, "env_set")) {
             // env_set(env_handle, key, value)
             const env_handle = if (args.len > 0) args[0] else makeInt(0);
             const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
             const val = if (args.len > 2) args[2] else makeInt(0);
             builtinEnvSet(env_handle, key, val);
-            return makeInt(0);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "env_find")) {
             // env_find(env_handle, key)
             const env_handle = if (args.len > 0) args[0] else makeInt(0);
             const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
-            if (builtinEnvFind(env_handle, key)) |v| return v;
-            return makeInt(0);
+            if (builtinEnvFind(env_handle, key)) |v| {
+                result = v;
+            } else {
+                result = makeInt(0);
+            }
         } else if (std.mem.eql(u8, name, "str_len")) {
             const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
-            return makeInt(@as(i64, @intCast(s.len)));
+            result = makeInt(@as(i64, @intCast(s.len)));
         } else if (std.mem.eql(u8, name, "str_char")) {
             const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
             const idx = expectInt(if (args.len > 1) args[1] else makeInt(0));
-            if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) return makeInt(0);
-            return makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
+            if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) {
+                result = makeInt(0);
+            } else {
+                result = makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
+            }
         } else if (std.mem.eql(u8, name, "str_slice")) {
             const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
             var start = expectInt(if (args.len > 1) args[1] else makeInt(0));
@@ -511,60 +529,73 @@ fn evalPrimary(env: *Env) Value {
             if (end > len) end = len;
             const ustart: usize = @intCast(start);
             const uend: usize = @intCast(end);
-            return .{ .str = s[ustart..uend] };
+            result = .{ .str = s[ustart..uend] };
         } else if (std.mem.eql(u8, name, "print_bytes")) {
             builtinPrintBytes(expectStr(if (args.len > 0) args[0] else Value{ .str = "" }));
-            return makeInt(0);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "print_char")) {
             const b: u8 = @intCast(expectInt(if (args.len > 0) args[0] else makeInt(0)));
             builtinPrintChar(b);
-            return makeInt(0);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "list_create")) {
-            return builtinListCreate();
+            result = builtinListCreate();
         } else if (std.mem.eql(u8, name, "list_push")) {
             const list_handle = if (args.len > 0) args[0] else makeInt(0);
             const v = if (args.len > 1) args[1] else makeInt(0);
             builtinListPush(list_handle, v);
-            return makeInt(0);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "list_len")) {
             const list_handle = if (args.len > 0) args[0] else makeInt(0);
-            return builtinListLen(list_handle);
+            result = builtinListLen(list_handle);
         } else if (std.mem.eql(u8, name, "list_get")) {
             const list_handle = if (args.len > 0) args[0] else makeInt(0);
             const idx_val = if (args.len > 1) args[1] else makeInt(0);
-            return builtinListGet(list_handle, idx_val);
+            result = builtinListGet(list_handle, idx_val);
         } else if (std.mem.eql(u8, name, "read_file")) {
             const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
-            return builtinReadFile(path);
+            result = builtinReadFile(path);
         } else if (std.mem.eql(u8, name, "write_file")) {
             const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
             const data = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
             builtinWriteFile(path, data);
-            return makeInt(0);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "arg_len")) {
-            return builtinArgLen();
+            result = builtinArgLen();
         } else if (std.mem.eql(u8, name, "arg_get")) {
             const idx_val = if (args.len > 0) args[0] else makeInt(0);
-            return builtinArgGet(idx_val);
+            result = builtinArgGet(idx_val);
+        } else {
+            // User-defined
+            result = runFunction(name, args, env);
         }
-
-        // User-defined
-        return runFunction(name, args, env);
+    } else {
+        const token = advance();
+        result = switch (token.kind) {
+            .integer => makeInt(std.fmt.parseInt(i64, token.text, 10) catch @panic("bad integer")),
+            .string => .{ .str = token.text[1 .. token.text.len - 1] },
+            .identifier => env.get(token.text) orelse makeInt(0),
+            .l_paren => blk: {
+                const v = evalExpr(env);
+                consume(.r_paren);
+                break :blk v;
+            },
+            else => makeInt(0),
+        };
     }
 
-    const token = advance();
+    // member access: obj.field -> env_find(obj, "field")
+    while (peek().kind == .dot) {
+        _ = advance(); // '.'
+        const field_tok = advance();
+        if (field_tok.kind != .identifier) @panic("member access: expected identifier");
+        if (builtinEnvFind(result, field_tok.text)) |v| {
+            result = v;
+        } else {
+            result = makeInt(0);
+        }
+    }
 
-    return switch (token.kind) {
-        .integer => makeInt(std.fmt.parseInt(i64, token.text, 10) catch @panic("bad integer")),
-        .string => .{ .str = token.text[1 .. token.text.len - 1] },
-        .identifier => env.get(token.text) orelse makeInt(0),
-        .l_paren => blk: {
-            const v = evalExpr(env);
-            consume(.r_paren);
-            break :blk v;
-        },
-        else => makeInt(0),
-    };
+    return result;
 }
 
 fn evalTerm(env: *Env) Value {
@@ -656,15 +687,33 @@ fn evalEquality(env: *Env) Value {
         switch (t.kind) {
             .equal_equal => {
                 _ = advance();
-                const lhs = expectInt(result);
-                const rhs = expectInt(evalCompare(env));
-                result = makeInt(if (lhs == rhs) 1 else 0);
+                const rhs = evalCompare(env);
+                const eq = switch (result) {
+                    .int => |lhs_i| switch (rhs) {
+                        .int => |rhs_i| lhs_i == rhs_i,
+                        .str => false,
+                    },
+                    .str => |lhs_s| switch (rhs) {
+                        .str => |rhs_s| std.mem.eql(u8, lhs_s, rhs_s),
+                        .int => false,
+                    },
+                };
+                result = makeInt(if (eq) 1 else 0);
             },
             .bang_equal => {
                 _ = advance();
-                const lhs = expectInt(result);
-                const rhs = expectInt(evalCompare(env));
-                result = makeInt(if (lhs != rhs) 1 else 0);
+                const rhs = evalCompare(env);
+                const eq = switch (result) {
+                    .int => |lhs_i| switch (rhs) {
+                        .int => |rhs_i| lhs_i == rhs_i,
+                        .str => false,
+                    },
+                    .str => |lhs_s| switch (rhs) {
+                        .str => |rhs_s| std.mem.eql(u8, lhs_s, rhs_s),
+                        .int => false,
+                    },
+                };
+                result = makeInt(if (!eq) 1 else 0);
             },
             else => return result,
         }
@@ -1086,6 +1135,11 @@ pub fn main() !void {
             },
             ')' => {
                 try list.append(.{ .kind = .r_paren, .text = source[i..i+1], .line = line });
+                i += 1;
+                continue;
+            },
+            '.' => {
+                try list.append(.{ .kind = .dot, .text = source[i..i+1], .line = line });
                 i += 1;
                 continue;
             },

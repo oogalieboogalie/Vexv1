@@ -1,0 +1,12 @@
+fn main() {
+    let o = env_create(0)
+    env_set(o, "x", 41)
+    env_set(o, "y", 1)
+
+    let x = o.x
+    let y = o.y
+    let tag = .hello
+    let eq = tag == "hello"
+
+    print("x={x} y={y} tag={tag} eq={eq}\n")
+}
