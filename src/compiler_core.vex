@@ -35,6 +35,16 @@ fn skip_line_comment(src, i) {
     return i
 }
 
+fn str_eq(a, b) {
+    if str_len(a) != str_len(b) { return 0 }
+    let i = 0
+    while i < str_len(a) {
+        if str_char(a, i) != str_char(b, i) { return 0 }
+        let i = i + 1
+    }
+    return 1
+}
+
 fn kind_name(k) {
     if k == 0 { return "Eof" }
     if k == 1 { return "Ident" }
@@ -219,11 +229,718 @@ fn dump_tokens(toks, max) {
     }
 }
 
+fn pair(a, b) {
+    let p = list_create()
+    list_push(p, a)
+    list_push(p, b)
+    return p
+}
+
+fn pair_node(p) { return list_get(p, 0) }
+fn pair_pos(p) { return list_get(p, 1) }
+
+fn tok_kind(toks, pos) {
+    let idx = pos * 2
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 0
+}
+
+fn tok_text(toks, pos) {
+    let idx = pos * 2 + 1
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return ""
+}
+
+fn parse_int(s) {
+    let v = 0
+    let i = 0
+    let n = str_len(s)
+    while i < n {
+        let c = str_char(s, i)
+        if c < 48 { return v }
+        if 57 < c { return v }
+        let v = v * 10 + (c - 48)
+        let i = i + 1
+    }
+    return v
+}
+
+fn strip_quotes(s) {
+    let n = str_len(s)
+    if n < 2 { return s }
+    if str_char(s, 0) == 34 and str_char(s, n - 1) == 34 {
+        return str_slice(s, 1, n - 1)
+    }
+    return s
+}
+
+// --- AST tags ---
+// Program: [100, funcs]
+// Func:    [101, name, p1, p2, p3, is_accel, body_block]
+// Block:   [102, stmts]
+// Stmts:   let [200, name, expr]
+//          print [201, expr]
+//          return [202, expr_or_0]
+//          if [203, cond, then_block]
+//          while [204, cond, body_block]
+//          expr [205, expr]
+// Exprs:   int [300, value]
+//          str [301, value]
+//          name [302, ident]
+//          bin [303, op_kind, left, right]
+//          call [304, callee, args]
+
+fn make_block(stmts) {
+    let b = list_create()
+    list_push(b, 102)
+    list_push(b, stmts)
+    return b
+}
+
+fn parse_primary(toks, pos) {
+    let k = tok_kind(toks, pos)
+
+    if k == 2 {
+        let txt = tok_text(toks, pos)
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, parse_int(txt))
+        return pair(node, pos + 1)
+    }
+
+    if k == 3 {
+        let raw = tok_text(toks, pos)
+        let node = list_create()
+        list_push(node, 301)
+        list_push(node, strip_quotes(raw))
+        return pair(node, pos + 1)
+    }
+
+    if k == 1 {
+        let name = tok_text(toks, pos)
+        if tok_kind(toks, pos + 1) == 11 {
+            let pos = pos + 2
+            let args = list_create()
+            while tok_kind(toks, pos) != 12 and tok_kind(toks, pos) != 0 {
+                let r = parse_expr(toks, pos)
+                list_push(args, pair_node(r))
+                let pos = pair_pos(r)
+            }
+            if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+
+            let node = list_create()
+            list_push(node, 304)
+            list_push(node, name)
+            list_push(node, args)
+            return pair(node, pos)
+        }
+
+        let node = list_create()
+        list_push(node, 302)
+        list_push(node, name)
+        return pair(node, pos + 1)
+    }
+
+    if k == 11 {
+        let r = parse_expr(toks, pos + 1)
+        let expr = pair_node(r)
+        let pos = pair_pos(r)
+        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        return pair(expr, pos)
+    }
+
+    let node = list_create()
+    list_push(node, 302)
+    list_push(node, "")
+    return pair(node, pos + 1)
+}
+
+fn parse_term(toks, pos) {
+    let r = parse_primary(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        let is_op = 0
+        if k == 20 { let is_op = 1 }
+        if k == 21 { let is_op = 1 }
+        if is_op == 0 { return pair(lhs, pos) }
+
+        let op = k
+        let r2 = parse_primary(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, op)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_add(toks, pos) {
+    let r = parse_term(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        let is_op = 0
+        if k == 18 { let is_op = 1 }
+        if k == 19 { let is_op = 1 }
+        if is_op == 0 { return pair(lhs, pos) }
+
+        let op = k
+        let r2 = parse_term(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, op)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_compare(toks, pos) {
+    let r = parse_add(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        let is_op = 0
+        if k == 22 { let is_op = 1 }
+        if k == 23 { let is_op = 1 }
+        if is_op == 0 { return pair(lhs, pos) }
+
+        let op = k
+        let r2 = parse_add(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, op)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_eq(toks, pos) {
+    let r = parse_compare(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        let is_op = 0
+        if k == 16 { let is_op = 1 }
+        if k == 17 { let is_op = 1 }
+        if is_op == 0 { return pair(lhs, pos) }
+
+        let op = k
+        let r2 = parse_compare(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, op)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_and(toks, pos) {
+    let r = parse_eq(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        if k != 24 { return pair(lhs, pos) }
+
+        let r2 = parse_eq(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, k)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_or(toks, pos) {
+    let r = parse_and(toks, pos)
+    let lhs = pair_node(r)
+    let pos = pair_pos(r)
+
+    while 1 {
+        let k = tok_kind(toks, pos)
+        if k != 25 { return pair(lhs, pos) }
+
+        let r2 = parse_and(toks, pos + 1)
+        let rhs = pair_node(r2)
+        let pos = pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, k)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+    return pair(lhs, pos)
+}
+
+fn parse_expr(toks, pos) {
+    return parse_or(toks, pos)
+}
+
+fn parse_block(toks, pos) {
+    let stmts = list_create()
+    if tok_kind(toks, pos) == 13 { let pos = pos + 1 }
+
+    while tok_kind(toks, pos) != 14 and tok_kind(toks, pos) != 0 {
+        let r = parse_stmt(toks, pos)
+        list_push(stmts, pair_node(r))
+        let pos = pair_pos(r)
+    }
+
+    if tok_kind(toks, pos) == 14 { let pos = pos + 1 }
+    return pair(make_block(stmts), pos)
+}
+
+fn parse_stmt(toks, pos) {
+    let k = tok_kind(toks, pos)
+
+    // let name = expr
+    if k == 4 {
+        let name = ""
+        if tok_kind(toks, pos + 1) == 1 { let name = tok_text(toks, pos + 1) }
+
+        let pos = pos + 1
+        if tok_kind(toks, pos) == 1 { let pos = pos + 1 }
+        while tok_kind(toks, pos) != 15 and tok_kind(toks, pos) != 0 { let pos = pos + 1 }
+        if tok_kind(toks, pos) == 15 { let pos = pos + 1 }
+
+        let r = parse_expr(toks, pos)
+        let expr = pair_node(r)
+        let pos = pair_pos(r)
+
+        let node = list_create()
+        list_push(node, 200)
+        list_push(node, name)
+        list_push(node, expr)
+        return pair(node, pos)
+    }
+
+    // print(expr)
+    if k == 5 {
+        let pos = pos + 1
+        if tok_kind(toks, pos) == 11 { let pos = pos + 1 }
+
+        let r = parse_expr(toks, pos)
+        let expr = pair_node(r)
+        let pos = pair_pos(r)
+
+        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+
+        let node = list_create()
+        list_push(node, 201)
+        list_push(node, expr)
+        return pair(node, pos)
+    }
+
+    // return expr?
+    if k == 7 {
+        let pos = pos + 1
+        let expr = 0
+        let next = tok_kind(toks, pos)
+        if next != 14 and next != 0 {
+            let r = parse_expr(toks, pos)
+            let expr = pair_node(r)
+            let pos = pair_pos(r)
+        }
+
+        let node = list_create()
+        list_push(node, 202)
+        list_push(node, expr)
+        return pair(node, pos)
+    }
+
+    // if cond { ... } or if cond stmt
+    if k == 8 {
+        let pos = pos + 1
+        let r = parse_expr(toks, pos)
+        let cond = pair_node(r)
+        let pos = pair_pos(r)
+
+        let then_block = 0
+        if tok_kind(toks, pos) == 13 {
+            let br = parse_block(toks, pos)
+            let then_block = pair_node(br)
+            let pos = pair_pos(br)
+
+            let node = list_create()
+            list_push(node, 203)
+            list_push(node, cond)
+            list_push(node, then_block)
+            return pair(node, pos)
+        }
+
+        let sr = parse_stmt(toks, pos)
+        let inner = pair_node(sr)
+        let pos = pair_pos(sr)
+        let stmts = list_create()
+        list_push(stmts, inner)
+        let then_block = make_block(stmts)
+
+        let node = list_create()
+        list_push(node, 203)
+        list_push(node, cond)
+        list_push(node, then_block)
+        return pair(node, pos)
+    }
+
+    // while cond { ... }
+    if k == 9 {
+        let pos = pos + 1
+        let r = parse_expr(toks, pos)
+        let cond = pair_node(r)
+        let pos = pair_pos(r)
+
+        let body = 0
+        if tok_kind(toks, pos) == 13 {
+            let br = parse_block(toks, pos)
+            let body = pair_node(br)
+            let pos = pair_pos(br)
+
+            let node = list_create()
+            list_push(node, 204)
+            list_push(node, cond)
+            list_push(node, body)
+            return pair(node, pos)
+        }
+
+        let sr = parse_stmt(toks, pos)
+        let inner = pair_node(sr)
+        let pos = pair_pos(sr)
+        let stmts = list_create()
+        list_push(stmts, inner)
+        let body = make_block(stmts)
+
+        let node = list_create()
+        list_push(node, 204)
+        list_push(node, cond)
+        list_push(node, body)
+        return pair(node, pos)
+    }
+
+    // { ... }
+    if k == 13 {
+        let br = parse_block(toks, pos)
+        let block = pair_node(br)
+        let pos = pair_pos(br)
+        return pair(block, pos)
+    }
+
+    // Fallback: expression statement.
+    let r = parse_expr(toks, pos)
+    let expr = pair_node(r)
+    let pos = pair_pos(r)
+
+    let node = list_create()
+    list_push(node, 205)
+    list_push(node, expr)
+    return pair(node, pos)
+}
+
+fn parse_func(toks, pos, is_accel) {
+    // consume 'fn'
+    if tok_kind(toks, pos) == 6 { let pos = pos + 1 }
+
+    let name = tok_text(toks, pos)
+    if tok_kind(toks, pos) == 1 { let pos = pos + 1 }
+
+    let p1 = ""
+    let p2 = ""
+    let p3 = ""
+    let param_i = 0
+
+    if tok_kind(toks, pos) == 11 {
+        let pos = pos + 1
+        while tok_kind(toks, pos) != 12 and tok_kind(toks, pos) != 0 {
+            if tok_kind(toks, pos) == 1 {
+                if param_i == 0 { let p1 = tok_text(toks, pos) }
+                if param_i == 1 { let p2 = tok_text(toks, pos) }
+                if param_i == 2 { let p3 = tok_text(toks, pos) }
+                let param_i = param_i + 1
+            }
+            let pos = pos + 1
+        }
+        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+    }
+
+    while tok_kind(toks, pos) != 13 and tok_kind(toks, pos) != 0 { let pos = pos + 1 }
+    let br = parse_block(toks, pos)
+    let body = pair_node(br)
+    let pos = pair_pos(br)
+
+    let node = list_create()
+    list_push(node, 101)
+    list_push(node, name)
+    list_push(node, p1)
+    list_push(node, p2)
+    list_push(node, p3)
+    list_push(node, is_accel)
+    list_push(node, body)
+    return pair(node, pos)
+}
+
+fn parse_program(toks) {
+    let funcs = list_create()
+    let pos = 0
+
+    while tok_kind(toks, pos) != 0 {
+        let is_accel = 0
+        if tok_kind(toks, pos) == 10 {
+            let is_accel = 1
+            let pos = pos + 1
+        }
+
+        if tok_kind(toks, pos) == 6 {
+            let fr = parse_func(toks, pos, is_accel)
+            list_push(funcs, pair_node(fr))
+            let pos = pair_pos(fr)
+        }
+
+        if tok_kind(toks, pos) != 6 {
+            let pos = pos + 1
+        }
+    }
+
+    let prog = list_create()
+    list_push(prog, 100)
+    list_push(prog, funcs)
+    return prog
+}
+
+fn indent(depth) {
+    let i = 0
+    while i < depth {
+        print_bytes("  ")
+        let i = i + 1
+    }
+}
+
+fn dump_expr(expr, depth, max_depth) {
+    if depth > max_depth { return 0 }
+
+    let tag = list_get(expr, 0)
+
+    if tag == 300 {
+        indent(depth)
+        let v = list_get(expr, 1)
+        print("Int {v}\n")
+        return 0
+    }
+    if tag == 301 {
+        indent(depth)
+        let s = list_get(expr, 1)
+        print("Str \"{s}\"\n")
+        return 0
+    }
+    if tag == 302 {
+        indent(depth)
+        let name = list_get(expr, 1)
+        print("Name {name}\n")
+        return 0
+    }
+    if tag == 304 {
+        indent(depth)
+        let callee = list_get(expr, 1)
+        let args = list_get(expr, 2)
+        let argc = list_len(args)
+        print("Call {callee} argc={argc}\n")
+        let i = 0
+        while i < argc {
+            dump_expr(list_get(args, i), depth + 1, max_depth)
+            let i = i + 1
+        }
+        return 0
+    }
+    if tag == 303 {
+        indent(depth)
+        let op = list_get(expr, 1)
+        print("Bin {kind_name(op)}\n")
+        dump_expr(list_get(expr, 2), depth + 1, max_depth)
+        dump_expr(list_get(expr, 3), depth + 1, max_depth)
+        return 0
+    }
+
+    indent(depth)
+    print("Expr?\n")
+    return 0
+}
+
+fn dump_stmt(stmt, depth, max_depth) {
+    if depth > max_depth { return 0 }
+
+    let tag = list_get(stmt, 0)
+
+    if tag == 200 {
+        indent(depth)
+        let name = list_get(stmt, 1)
+        print("Let {name}\n")
+        dump_expr(list_get(stmt, 2), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 201 {
+        indent(depth)
+        print("Print\n")
+        dump_expr(list_get(stmt, 1), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 202 {
+        indent(depth)
+        print("Return\n")
+        let e = list_get(stmt, 1)
+        if e != 0 { dump_expr(e, depth + 1, max_depth) }
+        return 0
+    }
+    if tag == 203 {
+        indent(depth)
+        print("If\n")
+        dump_expr(list_get(stmt, 1), depth + 1, max_depth)
+        dump_block(list_get(stmt, 2), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 204 {
+        indent(depth)
+        print("While\n")
+        dump_expr(list_get(stmt, 1), depth + 1, max_depth)
+        dump_block(list_get(stmt, 2), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 205 {
+        indent(depth)
+        print("ExprStmt\n")
+        dump_expr(list_get(stmt, 1), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 102 {
+        dump_block(stmt, depth, max_depth)
+        return 0
+    }
+
+    indent(depth)
+    print("Stmt?\n")
+    return 0
+}
+
+fn dump_block(block, depth, max_depth) {
+    if depth > max_depth { return 0 }
+
+    indent(depth)
+    print("Block\n")
+
+    let stmts = list_get(block, 1)
+    let n = list_len(stmts)
+    let i = 0
+    while i < n {
+        dump_stmt(list_get(stmts, i), depth + 1, max_depth)
+        let i = i + 1
+    }
+    return 0
+}
+
+fn dump_program_summary(prog) {
+    let funcs = list_get(prog, 1)
+    let n = list_len(funcs)
+    print("functions: {n}\n")
+
+    let i = 0
+    while i < n {
+        let f = list_get(funcs, i)
+        let name = list_get(f, 1)
+        let is_accel = list_get(f, 5)
+        let body = list_get(f, 6)
+        let stmts = list_get(body, 1)
+        let stmt_count = list_len(stmts)
+        print("fn {name} accel={is_accel} stmts={stmt_count}\n")
+        let i = i + 1
+    }
+    return 0
+}
+
+fn dump_program_tree(prog) {
+    let funcs = list_get(prog, 1)
+    let n = list_len(funcs)
+    print("Program\n")
+
+    let i = 0
+    while i < n {
+        let f = list_get(funcs, i)
+        let name = list_get(f, 1)
+        let is_accel = list_get(f, 5)
+        indent(1)
+        print("Fn {name} accel={is_accel}\n")
+        dump_block(list_get(f, 6), 2, 8)
+        let i = i + 1
+    }
+    return 0
+}
+
 fn main() {
+    let do_parse = 0
+    let dump_tree = 0
     let path = "src/vex.vex"
-    if 1 < arg_len() { let path = arg_get(1) }
+    if 1 < arg_len() {
+        let first = arg_get(1)
+
+        if str_eq(first, "parse") {
+            let do_parse = 1
+            if 2 < arg_len() { let path = arg_get(2) }
+            if 3 < arg_len() {
+                if str_eq(arg_get(3), "dump") { let dump_tree = 1 }
+            }
+        }
+
+        if do_parse == 0 and str_eq(first, "lex") {
+            if 2 < arg_len() { let path = arg_get(2) }
+        }
+
+        if do_parse == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 {
+            let path = first
+        }
+    }
+
     let src = read_file(path)
     let toks = tokenize(src)
+
+    if do_parse == 1 {
+        let prog = parse_program(toks)
+        if dump_tree == 1 { dump_program_tree(prog) }
+        if dump_tree == 0 { dump_program_summary(prog) }
+        return
+    }
 
     let total = list_len(toks) / 2
     print("tokenized {path}\n")

@@ -1024,6 +1024,7 @@ pub fn main() !void {
                 \\  vex [--verbose|-v] <file.vex> [args...]
                 \\  vex [--verbose|-v] run <file.vex> [args...]
                 \\  vex [--verbose|-v] lex <file.vex>
+                \\  vex [--verbose|-v] parse <file.vex> [dump]
                 \\
                 \\Notes:
                 \\  - with no args, runs `src/vex.vex`
@@ -1048,9 +1049,24 @@ pub fn main() !void {
             }
 
             const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
-            const args_buf = try allocator.alloc([]u8, 2);
+            const tail = host_args[argi..];
+            const args_buf = try allocator.alloc([]u8, tail.len + 1);
             args_buf[0] = compiler_script;
-            args_buf[1] = host_args[argi + 1];
+            for (tail, 0..) |arg, j| args_buf[j + 1] = arg;
+
+            file_path = compiler_script;
+            script_args = args_buf;
+        } else if (std.mem.eql(u8, cmd, "parse")) {
+            if (host_args.len <= argi + 1) {
+                print("error: missing file\n", .{});
+                return;
+            }
+
+            const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
+            const tail = host_args[argi..];
+            const args_buf = try allocator.alloc([]u8, tail.len + 1);
+            args_buf[0] = compiler_script;
+            for (tail, 0..) |arg, j| args_buf[j + 1] = arg;
 
             file_path = compiler_script;
             script_args = args_buf;

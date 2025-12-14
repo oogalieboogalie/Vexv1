@@ -20,6 +20,8 @@ Prereq: Zig `0.13.x`
 - Run a Vex file: `zig build run -- examples/hello.vex`
 - Run with args: `zig build run -- run examples/args.vex one two`
 - Lex a file using Vex code (self-hosting step): `zig build run -- lex examples/hello.vex`
+- Parse a file using Vex code (self-hosting step): `zig build run -- parse examples/hello.vex`
+- Dump parsed AST tree: `zig build run -- parse examples/hello.vex dump`
 - Verbose interpreter logs: `zig build run -- --verbose examples/hello.vex`
 - CLI help: `zig build run -- --help`
 
