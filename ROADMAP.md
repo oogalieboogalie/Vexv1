@@ -5,6 +5,7 @@ This is where we left off and where to go next.
 ## Current State
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
+  - Requires a system Zig `0.13.x` install (not vendored in this repo).
   - Executes Core Vex: `let`, `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`.
   - Operators: `+ - * /`, `< <= > >=`, `== !=` (ints + strings), `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).

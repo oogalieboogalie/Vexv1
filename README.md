@@ -13,7 +13,7 @@ We are ending the war.
 
 ## Try it
 
-Prereq: Zig `0.13.x`
+Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Zig.
 
 - Build: `zig build`
 - Run the demo (`src/vex.vex`): `zig build run`
