@@ -72,6 +72,9 @@ fn kind_name(k) {
     if k == 23 { return "LessEq" }
     if k == 24 { return "And" }
     if k == 25 { return "Or" }
+    if k == 26 { return "Greater" }
+    if k == 27 { return "GreaterEq" }
+    if k == 28 { return "Else" }
     return "Unknown"
 }
 
@@ -130,15 +133,18 @@ fn tokenize(src) {
                 if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 102 { let kind = 8 } // if
                 if str_char(src, start + 0) == 111 and str_char(src, start + 1) == 114 { let kind = 25 } // or
             }
-            if kind == 1 and len == 3 {
-                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
-                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 110 and str_char(src, start + 2) == 100 { let kind = 24 } // and
-            }
-            if kind == 1 and len == 5 {
-                if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
-                if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
-                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
-            }
+        if kind == 1 and len == 3 {
+            if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
+            if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 110 and str_char(src, start + 2) == 100 { let kind = 24 } // and
+        }
+        if kind == 1 and len == 4 {
+            if str_char(src, start + 0) == 101 and str_char(src, start + 1) == 108 and str_char(src, start + 2) == 115 and str_char(src, start + 3) == 101 { let kind = 28 } // else
+        }
+        if kind == 1 and len == 5 {
+            if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
+            if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
+            if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
+        }
             if kind == 1 and len == 6 {
                 if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
             }
@@ -173,6 +179,25 @@ fn tokenize(src) {
             if is_le == 0 {
                 list_push(toks, 22)
                 list_push(toks, "<")
+                let i = i + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 62 {
+            let is_ge = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_ge = 1 }
+            }
+
+            if is_ge == 1 {
+                list_push(toks, 27)
+                list_push(toks, ">=")
+                let i = i + 2
+            }
+            if is_ge == 0 {
+                list_push(toks, 26)
+                list_push(toks, ">")
                 let i = i + 1
             }
             let handled = 1
@@ -281,7 +306,7 @@ fn strip_quotes(s) {
 // Stmts:   let [200, name, expr]
 //          print [201, expr]
 //          return [202, expr_or_0]
-//          if [203, cond, then_block]
+//          if [203, cond, then_block, else_block_or_0]
 //          while [204, cond, body_block]
 //          expr [205, expr]
 // Exprs:   int [300, value]
@@ -419,6 +444,8 @@ fn parse_compare(toks, pos) {
         let is_op = 0
         if k == 22 { let is_op = 1 }
         if k == 23 { let is_op = 1 }
+        if k == 26 { let is_op = 1 }
+        if k == 27 { let is_op = 1 }
         if is_op == 0 { return pair(lhs, pos) }
 
         let op = k
@@ -593,29 +620,48 @@ fn parse_stmt(toks, pos) {
         let pos = pair_pos(r)
 
         let then_block = 0
+        let did_then = 0
         if tok_kind(toks, pos) == 13 {
             let br = parse_block(toks, pos)
             let then_block = pair_node(br)
             let pos = pair_pos(br)
-
-            let node = list_create()
-            list_push(node, 203)
-            list_push(node, cond)
-            list_push(node, then_block)
-            return pair(node, pos)
+            let did_then = 1
+        }
+        if did_then == 0 {
+            let sr = parse_stmt(toks, pos)
+            let inner = pair_node(sr)
+            let pos = pair_pos(sr)
+            let stmts = list_create()
+            list_push(stmts, inner)
+            let then_block = make_block(stmts)
         }
 
-        let sr = parse_stmt(toks, pos)
-        let inner = pair_node(sr)
-        let pos = pair_pos(sr)
-        let stmts = list_create()
-        list_push(stmts, inner)
-        let then_block = make_block(stmts)
+        let else_block = 0
+        if tok_kind(toks, pos) == 28 {
+            let pos = pos + 1
+
+            let did_else = 0
+            if tok_kind(toks, pos) == 13 {
+                let br = parse_block(toks, pos)
+                let else_block = pair_node(br)
+                let pos = pair_pos(br)
+                let did_else = 1
+            }
+            if did_else == 0 {
+                let sr = parse_stmt(toks, pos)
+                let inner = pair_node(sr)
+                let pos = pair_pos(sr)
+                let stmts = list_create()
+                list_push(stmts, inner)
+                let else_block = make_block(stmts)
+            }
+        }
 
         let node = list_create()
         list_push(node, 203)
         list_push(node, cond)
         list_push(node, then_block)
+        list_push(node, else_block)
         return pair(node, pos)
     }
 
@@ -795,6 +841,16 @@ fn eval_expr(expr, func_env, vals_env, defs_env, prog_args) {
         if op == 23 {
             let out = 0
             if lhs <= rhs { let out = 1 }
+            return out
+        }
+        if op == 26 {
+            let out = 0
+            if lhs > rhs { let out = 1 }
+            return out
+        }
+        if op == 27 {
+            let out = 0
+            if lhs >= rhs { let out = 1 }
             return out
         }
         if op == 16 {
@@ -1060,6 +1116,10 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
         if cond != 0 {
             return eval_block(list_get(stmt, 2), func_env, vals_env, defs_env, prog_args)
         }
+        let else_block = list_get(stmt, 3)
+        if else_block != 0 {
+            return eval_block(else_block, func_env, vals_env, defs_env, prog_args)
+        }
         return ret_pair(0, 0)
     }
 
@@ -1201,6 +1261,12 @@ fn dump_stmt(stmt, depth, max_depth) {
         print("If\n")
         dump_expr(list_get(stmt, 1), depth + 1, max_depth)
         dump_block(list_get(stmt, 2), depth + 1, max_depth)
+        let else_block = list_get(stmt, 3)
+        if else_block != 0 {
+            indent(depth)
+            print("Else\n")
+            dump_block(else_block, depth + 1, max_depth)
+        }
         return 0
     }
     if tag == 204 {
@@ -1424,6 +1490,16 @@ fn ceval_expr(expr, envs) {
             if lhs <= rhs { let out = 1 }
             return out
         }
+        if op == 26 {
+            let out = 0
+            if lhs > rhs { let out = 1 }
+            return out
+        }
+        if op == 27 {
+            let out = 0
+            if lhs >= rhs { let out = 1 }
+            return out
+        }
         if op == 16 {
             let out = 0
             if lhs == rhs { let out = 1 }
@@ -1577,6 +1653,10 @@ fn ceval_stmt(stmt, envs) {
     if tag == 203 {
         if ceval_expr(list_get(stmt, 1), envs) != 0 {
             return ceval_block(list_get(stmt, 2), envs)
+        }
+        let else_block = list_get(stmt, 3)
+        if else_block != 0 {
+            return ceval_block(else_block, envs)
         }
         return ceval_ret_pair(0, 0)
     }

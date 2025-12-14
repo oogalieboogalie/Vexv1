@@ -195,6 +195,7 @@ const Token = struct {
         keyword_fn,
         keyword_return,
         keyword_if,
+        keyword_else,
         keyword_while,
         keyword_and,
         keyword_or,
@@ -878,6 +879,19 @@ fn execBlock(env: *Env) ?Value {
     return null;
 }
 
+fn skipBlock() void {
+    consume(.l_brace);
+    var depth: usize = 1;
+    while (depth > 0 and peek().kind != .eof) {
+        const t = advance();
+        switch (t.kind) {
+            .l_brace => depth += 1,
+            .r_brace => depth -= 1,
+            else => {},
+        }
+    }
+}
+
 fn evalStmt(env: *Env) ?Value {
     const t = peek();
 
@@ -886,29 +900,28 @@ fn evalStmt(env: *Env) ?Value {
             _ = advance(); // 'if'
             const cond = expectInt(evalExpr(env));
 
+            if (peek().kind != .l_brace) @panic("if: expected {");
+
             if (cond != 0) {
-                if (peek().kind == .l_brace) {
-                    if (execBlock(env)) |ret| return ret;
-                } else {
-                    if (evalStmt(env)) |ret| return ret;
+                if (execBlock(env)) |ret| return ret;
+
+                if (peek().kind == .keyword_else) {
+                    _ = advance(); // 'else'
+                    if (peek().kind != .l_brace) @panic("else: expected {");
+                    skipBlock();
                 }
             } else {
-                if (peek().kind == .l_brace) {
-                    consume(.l_brace);
-                    var depth: usize = 1;
-                    while (depth > 0 and peek().kind != .eof) {
-                        const t2 = advance();
-                        switch (t2.kind) {
-                            .l_brace => depth += 1,
-                            .r_brace => depth -= 1,
-                            else => {},
-                        }
-                    }
-                } else {
-                    // skip one statement
-                    _ = evalStmt(env);
+                skipBlock();
+
+                if (peek().kind == .keyword_else) {
+                    _ = advance(); // 'else'
+                    if (peek().kind != .l_brace) @panic("else: expected {");
+                    if (execBlock(env)) |ret| return ret;
                 }
             }
+        },
+        .keyword_else => {
+            @panic("else without if");
         },
         .keyword_while => {
             _ = advance(); // 'while'
@@ -1258,6 +1271,7 @@ pub fn main() !void {
                 else if (std.mem.eql(u8, word, "fn")) .keyword_fn
                 else if (std.mem.eql(u8, word, "return")) .keyword_return
                 else if (std.mem.eql(u8, word, "if")) .keyword_if
+                else if (std.mem.eql(u8, word, "else")) .keyword_else
                 else if (std.mem.eql(u8, word, "while")) .keyword_while
                 else if (std.mem.eql(u8, word, "and")) .keyword_and
                 else if (std.mem.eql(u8, word, "or")) .keyword_or

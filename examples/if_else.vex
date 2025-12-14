@@ -1,0 +1,17 @@
+fn max(a, b) {
+    if a >= b { return a } else { return b }
+}
+
+fn main() {
+    let a = 2
+    let b = 3
+    let m1 = max(a, b)
+    print("max({a}, {b}) = {m1}\n")
+
+    let m2 = max(5, 1)
+    print("max(5, 1) = {m2}\n")
+
+    let gt = 0
+    if 7 > 4 { let gt = 1 } else { let gt = 0 }
+    print("7 > 4 = {gt}\n")
+}
