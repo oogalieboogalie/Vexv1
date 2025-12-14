@@ -28,4 +28,4 @@ Prereq: Zig `0.13.x`
 
 See `examples/` for small programs you can modify while iterating on the language.
 
-Join or be obsolete.
+
