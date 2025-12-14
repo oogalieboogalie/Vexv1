@@ -6,14 +6,16 @@ This is where we left off and where to go next.
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
   - Executes Core Vex: `let`, `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`.
-  - Operators: `+ - * /`, `< <= > >=`, `== !=`, `and` / `or`.
+  - Operators: `+ - * /`, `< <= > >=`, `== !=` (ints + strings), `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
+  - Supports dot: `.name` yields `"name"` and `obj.field` lowers to `env_find(obj, "field")`.
   - Has builtins for env, strings, lists, filesystem IO, and argv access.
 
 - Core self-hosting compiler (`src/compiler_core.vex`):
   - `tokenize(src)` implemented in Vex.
   - Recursive-descent parser that builds a list-based AST.
+  - Parses dot syntax: `.name` and `obj.field` (lowered to `env_find`).
   - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, and `vex eval <file.vex> [args...]`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
@@ -34,10 +36,13 @@ This is where we left off and where to go next.
      - Same function call behavior (single parameter recursion, `@accel` tags ignored or recorded but not required for correctness).
 
 2. Collapse `compiler.vex` to Core Vex
-   - Replace fantasy types like `Map[...]`, `[]T{}`, and `new Env` with Core-Vex-expressible patterns:
-     - Represent maps as `[]Pair` plus simple `for`-loops and linear lookup.
-     - Avoid generics; use concrete types like `[]u8`, `[]Token`.
-     - Replace method-style calls (`tokens.append`) with free functions (`tokens_push(&tokens, value)`).
+   - Preferred bootstrap path: keep Core minimal and only add the syntax/runtime features that unblock compiling/running the real compiler.
+   - The big missing pieces for `src/compiler.vex` are mostly syntax:
+     - Assignment statements (`x = expr`) and update assignment (`x += expr`)
+     - `true` / `false` / `null` literals (or a clean equivalent)
+     - `for` loops (or a desugaring rule to `while`) plus `break`/`continue`
+     - Indexing (`xs[i]`) or a first-class slice/list abstraction
+   - Once those land, focus shifts to pushing more of `src/compiler.vex` through `eval` without “throwaway” ports.
 
 3. Mirror AST in Zig
    - Refactor `bootstrap/main.zig` to:
