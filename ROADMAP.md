@@ -5,11 +5,16 @@ This is where we left off and where to go next.
 ## Current State
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
-  - Executes Core Vex: `let`, `print`, `fn`, single parameter, `return`, `if`, `<` / `<=`, recursion.
+  - Executes Core Vex: `let`, `print`, `fn`, up to 3 parameters, `return`, `if`, `while`.
+  - Operators: `+ - * /`, `< <=`, `== !=`, `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
-  - Runs `src/vex.vex` and prints `fib(16) = 987` from pure Vex code.
-  - Has experimental built-ins: `env_create`, `env_set`, `env_find` backed by a Zig `KVEnv` map (lookups currently return `0` for our test key, so this path is WIP).
+  - Has builtins for env, strings, lists, filesystem IO, and argv access.
+
+- Core self-hosting compiler (`src/compiler_core.vex`):
+  - `tokenize(src)` implemented in Vex.
+  - Recursive-descent parser that builds a list-based AST.
+  - Wired into CLI: `vex lex <file.vex>` and `vex parse <file.vex> [dump]`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
   - Defines `TokenKind` / `Token` matching the interpreter's lexer.
@@ -26,7 +31,7 @@ This is where we left off and where to go next.
      - Same return semantics inside nested `if` / blocks.
      - Same truthiness rules (`0` vs non-zero).
      - Same handling of unknown variables/functions (panic vs default).
-      - Same function call behavior (single parameter recursion, `@accel` tags ignored or recorded but not required for correctness).
+     - Same function call behavior (single parameter recursion, `@accel` tags ignored or recorded but not required for correctness).
 
 2. Collapse `compiler.vex` to Core Vex
    - Replace fantasy types like `Map[...]`, `[]T{}`, and `new Env` with Core-Vex-expressible patterns:
@@ -57,18 +62,18 @@ This is where we left off and where to go next.
      - Expression evaluation.
      - Statement execution (`let`, `return`, `if`, calls).
      - Function/env management.
-   - Aim for a mode where the Zig binary “just” loads `compiler.vex`, calls into it, and lets Vex drive evaluation.
+   - Aim for a mode where the Zig binary "just" loads `compiler.vex`, calls into it, and lets Vex drive evaluation.
 
 7. Code generation path
    - Design an intermediate representation (IR) for Vex:
      - Either a small bytecode for a Vex VM, or a simple SSA-style IR.
-   - Add lowering from `ProgramAst` → IR in `compiler.vex`.
+   - Add lowering from `ProgramAst` -> IR in `compiler.vex`.
    - In Zig, write a small VM to execute that IR as a first non-interpreter backend.
 
 8. GPU / @accel story
    - Decide on the first real `@accel` target (CUDA via LLVM, or a simpler CPU vector path).
-   - Map `@accel` functions from AST → specialized IR or direct LLVM IR.
-   - Keep the CPU stub behavior as a fallback when accelerators aren’t available.
+   - Map `@accel` functions from AST -> specialized IR or direct LLVM IR.
+   - Keep the CPU stub behavior as a fallback when accelerators aren't available.
 
 ## Long-Term Dream
 
@@ -78,4 +83,4 @@ This is where we left off and where to go next.
      - Platform bindings (FS, GPU, system APIs).
    - Everything else lives in Vex.
 
-When you pick this back up, a good starting task is Step 2: simplify one part of `compiler.vex` (for example, the Env/map handling) into Core Vex style that the current interpreter could realistically learn to execute.*** End Patch``` 욞assistantเล็ต to=functions.apply_patch.Cursorsh_COMMENTARY  tabletop to=functions.apply_patch  SQL json-ignore-natural-language# reasoning  komplet  draft to=functions.apply_patch  
+When you pick this back up, a good starting task is Step 2: simplify one part of `compiler.vex` (for example, the Env/map handling) into Core Vex style that the current interpreter could realistically learn to execute.
