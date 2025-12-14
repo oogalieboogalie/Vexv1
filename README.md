@@ -38,3 +38,7 @@ See `examples/` for small programs you can modify while iterating on the languag
 - Records: `obj.field` lowers to `env_find(obj, "field")`; `.name` yields `"name"`
 
 See `ROADMAP.md` for what's next.
+
+## License
+
+MIT. See `LICENSE`.
