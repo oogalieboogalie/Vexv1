@@ -221,9 +221,7 @@ const Token = struct {
 
 const Func = struct {
     name: []const u8,
-    param_name: ?[]const u8,
-    param_name2: ?[]const u8,
-    param_name3: ?[]const u8,
+    param_names: []const []const u8,
     body: []Token,
     is_accel: bool,
 };
@@ -353,26 +351,21 @@ fn parseFunction(is_accel: bool) void {
     const name_tok = advance();
     if (name_tok.kind != .identifier) @panic("expected function name");
 
-    var param_name: ?[]const u8 = null;
-    var param_name2: ?[]const u8 = null;
-    var param_name3: ?[]const u8 = null;
+    var params = std.ArrayList([]const u8).init(allocator);
+    defer params.deinit();
 
     if (peek().kind == .l_paren) {
         consume(.l_paren);
         while (peek().kind != .r_paren and peek().kind != .eof) {
             const param_tok = advance();
             if (param_tok.kind == .identifier) {
-                if (param_name == null) {
-                    param_name = param_tok.text;
-                } else if (param_name2 == null) {
-                    param_name2 = param_tok.text;
-                } else if (param_name3 == null) {
-                    param_name3 = param_tok.text;
-                }
+                params.append(param_tok.text) catch @panic("oom");
             }
         }
         consume(.r_paren);
     }
+
+    const param_names = allocator.dupe([]const u8, params.items) catch @panic("oom");
 
     // Skip until function body '{'
     while (peek().kind != .l_brace and peek().kind != .eof) {
@@ -409,9 +402,7 @@ fn parseFunction(is_accel: bool) void {
 
     const func = Func{
         .name = name_tok.text,
-        .param_name = param_name,
-        .param_name2 = param_name2,
-        .param_name3 = param_name3,
+        .param_names = param_names,
         .body = body_slice,
         .is_accel = is_accel,
     };
@@ -425,7 +416,7 @@ fn parseFunction(is_accel: bool) void {
     }
 }
 
-fn runFunction(name: []const u8, arg1: ?Value, arg2: ?Value, arg3: ?Value, caller_env: *Env) Value {
+fn runFunction(name: []const u8, args: []const Value, caller_env: *Env) Value {
     const func = functions.get(name) orelse {
         print("[undefined function] {s}\n", .{name});
         @panic("undefined function");
@@ -443,26 +434,9 @@ fn runFunction(name: []const u8, arg1: ?Value, arg2: ?Value, arg3: ?Value, calle
         allocator.destroy(local_env);
     }
 
-    if (func.param_name) |param| {
-        if (arg1) |a| {
-            local_env.set(param, a);
-        } else {
-            local_env.set(param, makeInt(0));
-        }
-    }
-    if (func.param_name2) |param| {
-        if (arg2) |a| {
-            local_env.set(param, a);
-        } else {
-            local_env.set(param, makeInt(0));
-        }
-    }
-    if (func.param_name3) |param| {
-        if (arg3) |a| {
-            local_env.set(param, a);
-        } else {
-            local_env.set(param, makeInt(0));
-        }
+    for (func.param_names, 0..) |param, idx| {
+        const v = if (idx < args.len) args[idx] else makeInt(0);
+        local_env.set(param, v);
     }
 
     var result: Value = makeInt(0);
@@ -489,155 +463,93 @@ fn evalPrimary(env: *Env) Value {
     if (t.kind == .identifier and pos + 1 < tokens.len and tokens[pos + 1].kind == .l_paren) {
         const name = t.text;
 
-        // Built-ins live here for now.
-        if (std.mem.eql(u8, name, "env_create") or
-            std.mem.eql(u8, name, "env_set") or
-            std.mem.eql(u8, name, "env_find") or
-            std.mem.eql(u8, name, "str_len") or
-            std.mem.eql(u8, name, "str_char") or
-            std.mem.eql(u8, name, "str_slice") or
-            std.mem.eql(u8, name, "print_bytes") or
-            std.mem.eql(u8, name, "print_char") or
-            std.mem.eql(u8, name, "list_create") or
-            std.mem.eql(u8, name, "list_push") or
-            std.mem.eql(u8, name, "list_len") or
-            std.mem.eql(u8, name, "list_get") or
-            std.mem.eql(u8, name, "read_file") or
-            std.mem.eql(u8, name, "write_file") or
-            std.mem.eql(u8, name, "arg_len") or
-            std.mem.eql(u8, name, "arg_get"))
-        {
-            _ = advance(); // identifier
-            consume(.l_paren);
-
-            if (std.mem.eql(u8, name, "env_create")) {
-                var parent_handle: ?Value = null;
-                if (peek().kind != .r_paren) {
-                    parent_handle = evalExpr(env);
-                }
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinEnvCreate(parent_handle);
-            } else if (std.mem.eql(u8, name, "env_set")) {
-                // env_set(env_handle, key, value)
-                const env_handle = evalExpr(env);
-                const key_val = evalExpr(env);
-                const key = expectStr(key_val);
-                const val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-
-                builtinEnvSet(env_handle, key, val);
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "env_find")) {
-                // env_find(env_handle, key)
-                const env_handle = evalExpr(env);
-                const key_val = evalExpr(env);
-                const key = expectStr(key_val);
-
-                if (peek().kind == .r_paren) consume(.r_paren);
-
-                if (builtinEnvFind(env_handle, key)) |v| return v;
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "str_len")) {
-                const s_val = if (peek().kind != .r_paren) evalExpr(env) else Value{ .str = "" };
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const s = expectStr(s_val);
-                return makeInt(@as(i64, @intCast(s.len)));
-            } else if (std.mem.eql(u8, name, "str_char")) {
-                const s_val = evalExpr(env);
-                const idx_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const s = expectStr(s_val);
-                const idx = expectInt(idx_val);
-                if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) return makeInt(0);
-                return makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
-            } else if (std.mem.eql(u8, name, "str_slice")) {
-                const s_val = evalExpr(env);
-                const start_val = evalExpr(env);
-                const end_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const s = expectStr(s_val);
-                var start = expectInt(start_val);
-                var end = expectInt(end_val);
-                if (start < 0) start = 0;
-                if (end < start) end = start;
-                const len = @as(i64, @intCast(s.len));
-                if (start > len) start = len;
-                if (end > len) end = len;
-                const ustart: usize = @intCast(start);
-                const uend: usize = @intCast(end);
-                return .{ .str = s[ustart..uend] };
-            } else if (std.mem.eql(u8, name, "print_bytes")) {
-                const s_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const s = expectStr(s_val);
-                builtinPrintBytes(s);
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "print_char")) {
-                const v = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const b: u8 = @intCast(expectInt(v));
-                builtinPrintChar(b);
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "list_create")) {
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinListCreate();
-            } else if (std.mem.eql(u8, name, "list_push")) {
-                const list_handle = evalExpr(env);
-                const v = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                builtinListPush(list_handle, v);
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "list_len")) {
-                const list_handle = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinListLen(list_handle);
-            } else if (std.mem.eql(u8, name, "list_get")) {
-                const list_handle = evalExpr(env);
-                const idx_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinListGet(list_handle, idx_val);
-            } else if (std.mem.eql(u8, name, "read_file")) {
-                const path_val = if (peek().kind != .r_paren) evalExpr(env) else Value{ .str = "" };
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const path = expectStr(path_val);
-                return builtinReadFile(path);
-            } else if (std.mem.eql(u8, name, "write_file")) {
-                const path_val = evalExpr(env);
-                const data_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                const path = expectStr(path_val);
-                const data = expectStr(data_val);
-                builtinWriteFile(path, data);
-                return makeInt(0);
-            } else if (std.mem.eql(u8, name, "arg_len")) {
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinArgLen();
-            } else if (std.mem.eql(u8, name, "arg_get")) {
-                const idx_val = evalExpr(env);
-                if (peek().kind == .r_paren) consume(.r_paren);
-                return builtinArgGet(idx_val);
-            }
-        }
-
-        // User-defined function call (one optional argument)
         _ = advance(); // identifier
         consume(.l_paren);
 
-        var arg1: ?Value = null;
-        var arg2: ?Value = null;
-        var arg3: ?Value = null;
-        if (peek().kind != .r_paren) {
-            arg1 = evalExpr(env);
-        }
-        if (peek().kind != .r_paren) {
-            arg2 = evalExpr(env);
-        }
-        if (peek().kind != .r_paren) {
-            arg3 = evalExpr(env);
+        var args_list = std.ArrayList(Value).init(allocator);
+        defer args_list.deinit();
+        while (peek().kind != .r_paren and peek().kind != .eof) {
+            args_list.append(evalExpr(env)) catch @panic("oom");
         }
         if (peek().kind == .r_paren) consume(.r_paren);
 
-        return runFunction(name, arg1, arg2, arg3, env);
+        const args = args_list.items;
+
+        // Built-ins live here for now.
+        if (std.mem.eql(u8, name, "env_create")) {
+            const parent_handle: ?Value = if (args.len > 0) args[0] else null;
+            return builtinEnvCreate(parent_handle);
+        } else if (std.mem.eql(u8, name, "env_set")) {
+            // env_set(env_handle, key, value)
+            const env_handle = if (args.len > 0) args[0] else makeInt(0);
+            const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            const val = if (args.len > 2) args[2] else makeInt(0);
+            builtinEnvSet(env_handle, key, val);
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "env_find")) {
+            // env_find(env_handle, key)
+            const env_handle = if (args.len > 0) args[0] else makeInt(0);
+            const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            if (builtinEnvFind(env_handle, key)) |v| return v;
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "str_len")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            return makeInt(@as(i64, @intCast(s.len)));
+        } else if (std.mem.eql(u8, name, "str_char")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const idx = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) return makeInt(0);
+            return makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
+        } else if (std.mem.eql(u8, name, "str_slice")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            var start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            var end = expectInt(if (args.len > 2) args[2] else makeInt(0));
+            if (start < 0) start = 0;
+            if (end < start) end = start;
+            const len = @as(i64, @intCast(s.len));
+            if (start > len) start = len;
+            if (end > len) end = len;
+            const ustart: usize = @intCast(start);
+            const uend: usize = @intCast(end);
+            return .{ .str = s[ustart..uend] };
+        } else if (std.mem.eql(u8, name, "print_bytes")) {
+            builtinPrintBytes(expectStr(if (args.len > 0) args[0] else Value{ .str = "" }));
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "print_char")) {
+            const b: u8 = @intCast(expectInt(if (args.len > 0) args[0] else makeInt(0)));
+            builtinPrintChar(b);
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "list_create")) {
+            return builtinListCreate();
+        } else if (std.mem.eql(u8, name, "list_push")) {
+            const list_handle = if (args.len > 0) args[0] else makeInt(0);
+            const v = if (args.len > 1) args[1] else makeInt(0);
+            builtinListPush(list_handle, v);
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "list_len")) {
+            const list_handle = if (args.len > 0) args[0] else makeInt(0);
+            return builtinListLen(list_handle);
+        } else if (std.mem.eql(u8, name, "list_get")) {
+            const list_handle = if (args.len > 0) args[0] else makeInt(0);
+            const idx_val = if (args.len > 1) args[1] else makeInt(0);
+            return builtinListGet(list_handle, idx_val);
+        } else if (std.mem.eql(u8, name, "read_file")) {
+            const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            return builtinReadFile(path);
+        } else if (std.mem.eql(u8, name, "write_file")) {
+            const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const data = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            builtinWriteFile(path, data);
+            return makeInt(0);
+        } else if (std.mem.eql(u8, name, "arg_len")) {
+            return builtinArgLen();
+        } else if (std.mem.eql(u8, name, "arg_get")) {
+            const idx_val = if (args.len > 0) args[0] else makeInt(0);
+            return builtinArgGet(idx_val);
+        }
+
+        // User-defined
+        return runFunction(name, args, env);
     }
 
     const token = advance();
@@ -839,7 +751,8 @@ fn renderString(env: *Env, raw: []const u8) void {
                 // Skip until closing ')'
                 while (k < expr.len and expr[k] != ')') : (k += 1) {}
 
-                const val = runFunction(name, arg_val, null, null, env);
+                const tmp_args = [_]Value{arg_val};
+                const val = runFunction(name, tmp_args[0..], env);
                 switch (val) {
                     .int => |n| print("{d}", .{n}),
                     .str => |s| print("{s}", .{s}),
@@ -1318,7 +1231,8 @@ pub fn main() !void {
 
     if (functions.get("main")) |main_func| {
         _ = main_func; // value unused, we just check existence
-        _ = runFunction("main", null, null, null, global_env);
+        const tmp_args = [_]Value{};
+        _ = runFunction("main", tmp_args[0..], global_env);
     }
 
     if (verbose) {

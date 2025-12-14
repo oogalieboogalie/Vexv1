@@ -5,7 +5,7 @@ This is where we left off and where to go next.
 ## Current State
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
-  - Executes Core Vex: `let`, `print`, `fn`, up to 3 parameters, `return`, `if`/`else`, `while`.
+  - Executes Core Vex: `let`, `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`.
   - Operators: `+ - * /`, `< <= > >=`, `== !=`, `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.

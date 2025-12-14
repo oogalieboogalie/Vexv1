@@ -301,7 +301,7 @@ fn strip_quotes(s) {
 
 // --- AST tags ---
 // Program: [100, funcs]
-// Func:    [101, name, p1, p2, p3, is_accel, body_block]
+// Func:    [101, name, p1, p2, p3, is_accel, body_block, params]
 // Block:   [102, stmts]
 // Stmts:   let [200, name, expr]
 //          print [201, expr]
@@ -728,6 +728,7 @@ fn parse_func(toks, pos, is_accel) {
     let p1 = ""
     let p2 = ""
     let p3 = ""
+    let params = list_create()
     let param_i = 0
 
     if tok_kind(toks, pos) == 11 {
@@ -737,6 +738,7 @@ fn parse_func(toks, pos, is_accel) {
                 if param_i == 0 { let p1 = tok_text(toks, pos) }
                 if param_i == 1 { let p2 = tok_text(toks, pos) }
                 if param_i == 2 { let p3 = tok_text(toks, pos) }
+                list_push(params, tok_text(toks, pos))
                 let param_i = param_i + 1
             }
             let pos = pos + 1
@@ -757,6 +759,7 @@ fn parse_func(toks, pos, is_accel) {
     list_push(node, p3)
     list_push(node, is_accel)
     list_push(node, body)
+    list_push(node, params)
     return pair(node, pos)
 }
 
@@ -1367,25 +1370,40 @@ fn ceval_user_func(func_node, args, caller_envs) {
     let vals = env_create(parent_vals)
     let defs = env_create(parent_defs)
 
-    let p1 = list_get(func_node, 2)
-    let p2 = list_get(func_node, 3)
-    let p3 = list_get(func_node, 4)
+    let params = list_get(func_node, 7)
+    if params == 0 {
+        let p1 = list_get(func_node, 2)
+        let p2 = list_get(func_node, 3)
+        let p3 = list_get(func_node, 4)
 
-    let a0 = list_get(args, 0)
-    let a1 = list_get(args, 1)
-    let a2 = list_get(args, 2)
+        let a0 = list_get(args, 0)
+        let a1 = list_get(args, 1)
+        let a2 = list_get(args, 2)
 
-    if str_len(p1) != 0 {
-        env_set(vals, p1, a0)
-        env_set(defs, p1, 1)
+        if str_len(p1) != 0 {
+            env_set(vals, p1, a0)
+            env_set(defs, p1, 1)
+        }
+        if str_len(p2) != 0 {
+            env_set(vals, p2, a1)
+            env_set(defs, p2, 1)
+        }
+        if str_len(p3) != 0 {
+            env_set(vals, p3, a2)
+            env_set(defs, p3, 1)
+        }
     }
-    if str_len(p2) != 0 {
-        env_set(vals, p2, a1)
-        env_set(defs, p2, 1)
-    }
-    if str_len(p3) != 0 {
-        env_set(vals, p3, a2)
-        env_set(defs, p3, 1)
+    if params != 0 {
+        let i = 0
+        let n = list_len(params)
+        while i < n {
+            let p = list_get(params, i)
+            if str_len(p) != 0 {
+                env_set(vals, p, list_get(args, i))
+                env_set(defs, p, 1)
+            }
+            let i = i + 1
+        }
     }
 
     let envs = pair(vals, defs)
@@ -1456,7 +1474,7 @@ fn ceval_call(call_expr, envs) {
     let args = list_create()
     let i = 0
     let n = list_len(arg_exprs)
-    while i < n and i < 3 {
+    while i < n {
         list_push(args, ceval_expr(list_get(arg_exprs, i), envs))
         let i = i + 1
     }

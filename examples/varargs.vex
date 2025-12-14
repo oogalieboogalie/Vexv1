@@ -1,0 +1,8 @@
+fn sum5(a, b, c, d, e) {
+    return a + b + c + d + e
+}
+
+fn main() {
+    let x = sum5(1, 2, 3, 4, 5)
+    print("sum5(1, 2, 3, 4, 5) = {x}\n")
+}
