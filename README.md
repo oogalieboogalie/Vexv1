@@ -28,6 +28,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Assignment + literals demo (`=`, `+=`, `true/false/null`): `zig build run -- examples/assign.vex` and `zig build run -- eval examples/assign.vex`
 - For + indexing demo (`for i in a..b`, `xs[i]`): `zig build run -- examples/for_index.vex` and `zig build run -- eval examples/for_index.vex`
 - Index assignment demo (`xs[i] = v`, `xs[i] += v`): `zig build run -- examples/index_assign.vex` and `zig build run -- eval examples/index_assign.vex`
+- Break/continue demo: `zig build run -- examples/break_continue.vex` and `zig build run -- eval examples/break_continue.vex`
 - Verbose interpreter logs: `zig build run -- --verbose examples/hello.vex`
 - CLI help: `zig build run -- --help`
 
@@ -35,7 +36,7 @@ See `examples/` for small programs you can modify while iterating on the languag
 
 ## Core Vex (today)
 
-- Statements: `let`, assignment (`=` / `+=`), `print`, `fn`, `return`, `if`/`else`, `while`, `for i in a..b { ... }`
+- Statements: `let`, assignment (`=` / `+=`), `print`, `fn`, `return`, `if`/`else`, `while`, `for i in a..b { ... }`, `break`, `continue`
 - Calls: arbitrary arity; builtins for env, strings, lists, filesystem IO, argv
 - Indexing: `xs[i]` lowers to `list_get(xs, i)`
 - Index assignment: `xs[i] = v` / `xs[i] += v` lowers to `list_set(xs, i, ...)`

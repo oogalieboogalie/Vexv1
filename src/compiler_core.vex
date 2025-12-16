@@ -85,6 +85,8 @@ fn kind_name(k) {
     if k == 36 { return "DotDot" }
     if k == 37 { return "LBracket" }
     if k == 38 { return "RBracket" }
+    if k == 39 { return "Break" }
+    if k == 40 { return "Continue" }
     return "Unknown"
 }
 
@@ -159,10 +161,14 @@ fn tokenize(src) {
             if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
             if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
             if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 97 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 115 and str_char(src, start + 4) == 101 { let kind = 32 } // false
+            if str_char(src, start + 0) == 98 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 101 and str_char(src, start + 3) == 97 and str_char(src, start + 4) == 107 { let kind = 39 } // break
         }
-            if kind == 1 and len == 6 {
-                if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
-            }
+        if kind == 1 and len == 6 {
+            if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
+        }
+        if kind == 1 and len == 8 {
+            if str_char(src, start + 0) == 99 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 110 and str_char(src, start + 3) == 116 and str_char(src, start + 4) == 105 and str_char(src, start + 5) == 110 and str_char(src, start + 6) == 117 and str_char(src, start + 7) == 101 { let kind = 40 } // continue
+        }
 
             list_push(toks, kind)
             list_push(toks, str_slice(src, start, i))
@@ -359,6 +365,8 @@ fn strip_quotes(s) {
 //          assign [206, op_kind, name, expr] // op_kind: Equal or PlusEq
 //          for [207, name, start_expr, end_expr, body_block]
 //          index_assign [208, op_kind, name, index_expr, value_expr] // op_kind: Equal or PlusEq
+//          break [209]
+//          continue [210]
 //          expr [205, expr]
 // Exprs:   int [300, value]
 //          str [301, value]
@@ -874,6 +882,20 @@ fn parse_stmt(toks, pos) {
         return pair(node, pos)
     }
 
+    // break
+    if k == 39 {
+        let node = list_create()
+        list_push(node, 209)
+        return pair(node, pos + 1)
+    }
+
+    // continue
+    if k == 40 {
+        let node = list_create()
+        list_push(node, 210)
+        return pair(node, pos + 1)
+    }
+
     // { ... }
     if k == 13 {
         let br = parse_block(toks, pos)
@@ -1011,14 +1033,14 @@ fn parse_program(toks) {
 
 // --- Eval (Vex-in-Vex execution) ---
 
-fn ret_pair(did_return, value) {
+fn ret_pair(kind, value) {
     let r = list_create()
-    list_push(r, did_return)
+    list_push(r, kind)
     list_push(r, value)
     return r
 }
 
-fn ret_did(r) { return list_get(r, 0) }
+fn ret_kind(r) { return list_get(r, 0) }
 fn ret_val(r) { return list_get(r, 1) }
 
 fn is_digit_char(c) {
@@ -1136,7 +1158,9 @@ fn eval_user_func(func_node, a0, a1, a2, func_env, caller_vals, caller_defs, pro
     }
 
     let r = eval_block(body, func_env, vals, defs, prog_args)
-    if ret_did(r) != 0 { return ret_val(r) }
+    let k = ret_kind(r)
+    if k == 1 { return ret_val(r) }
+    if k != 0 { print("[control flow escaped function]\n") }
     return 0
 }
 
@@ -1362,6 +1386,9 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
         return ret_pair(1, v)
     }
 
+    if tag == 209 { return ret_pair(2, 0) }
+    if tag == 210 { return ret_pair(3, 0) }
+
     if tag == 203 {
         let cond = eval_expr(list_get(stmt, 1), func_env, vals_env, defs_env, prog_args)
         if cond != 0 {
@@ -1379,7 +1406,9 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
         let body = list_get(stmt, 2)
         while eval_expr(cond_expr, func_env, vals_env, defs_env, prog_args) != 0 {
             let r = eval_block(body, func_env, vals_env, defs_env, prog_args)
-            if ret_did(r) != 0 { return r }
+            let k = ret_kind(r)
+            if k == 1 { return r }
+            if k == 2 { return ret_pair(0, 0) }
         }
         return ret_pair(0, 0)
     }
@@ -1395,7 +1424,9 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
                 env_set(defs_env, name, 1)
             }
             let r = eval_block(body, func_env, vals_env, defs_env, prog_args)
-            if ret_did(r) != 0 { return r }
+            let k = ret_kind(r)
+            if k == 1 { return r }
+            if k == 2 { return ret_pair(0, 0) }
             let start = start + 1
         }
         return ret_pair(0, 0)
@@ -1416,7 +1447,7 @@ fn eval_block(block, func_env, vals_env, defs_env, prog_args) {
     while i < n {
         let s = list_get(stmts, i)
         let r = eval_stmt(s, func_env, vals_env, defs_env, prog_args)
-        if ret_did(r) != 0 { return r }
+        if ret_kind(r) != 0 { return r }
         let i = i + 1
     }
     return ret_pair(0, 0)
@@ -1572,6 +1603,16 @@ fn dump_stmt(stmt, depth, max_depth) {
         dump_block(list_get(stmt, 4), depth + 1, max_depth)
         return 0
     }
+    if tag == 209 {
+        indent(depth)
+        print("Break\n")
+        return 0
+    }
+    if tag == 210 {
+        indent(depth)
+        print("Continue\n")
+        return 0
+    }
     if tag == 205 {
         indent(depth)
         print("ExprStmt\n")
@@ -1643,14 +1684,14 @@ fn dump_program_tree(prog) {
 
 // --- Vex-in-Vex execution (Core AST evaluator) ---
 
-fn ceval_ret_pair(did_return, value) {
+fn ceval_ret_pair(kind, value) {
     let r = list_create()
-    list_push(r, did_return)
+    list_push(r, kind)
     list_push(r, value)
     return r
 }
 
-fn ceval_ret_did(r) { return list_get(r, 0) }
+fn ceval_ret_kind(r) { return list_get(r, 0) }
 fn ceval_ret_val(r) { return list_get(r, 1) }
 
 fn ceval_env_vals(envs) { return list_get(envs, 0) }
@@ -1701,7 +1742,9 @@ fn ceval_user_func(func_node, args, caller_envs) {
 
     let envs = pair(vals, defs)
     let r = ceval_block(list_get(func_node, 6), envs)
-    if ceval_ret_did(r) != 0 { return ceval_ret_val(r) }
+    let k = ceval_ret_kind(r)
+    if k == 1 { return ceval_ret_val(r) }
+    if k != 0 { print("[control flow escaped function]\n") }
     return 0
 }
 
@@ -1990,6 +2033,9 @@ fn ceval_stmt(stmt, envs) {
         return ceval_ret_pair(1, ceval_expr(expr, envs))
     }
 
+    if tag == 209 { return ceval_ret_pair(2, 0) }
+    if tag == 210 { return ceval_ret_pair(3, 0) }
+
     if tag == 203 {
         if ceval_expr(list_get(stmt, 1), envs) != 0 {
             return ceval_block(list_get(stmt, 2), envs)
@@ -2006,7 +2052,9 @@ fn ceval_stmt(stmt, envs) {
         let body = list_get(stmt, 2)
         while ceval_expr(cond_expr, envs) != 0 {
             let r = ceval_block(body, envs)
-            if ceval_ret_did(r) != 0 { return r }
+            let k = ceval_ret_kind(r)
+            if k == 1 { return r }
+            if k == 2 { return ceval_ret_pair(0, 0) }
         }
         return ceval_ret_pair(0, 0)
     }
@@ -2022,7 +2070,9 @@ fn ceval_stmt(stmt, envs) {
                 env_set(ceval_env_defs(envs), name, 1)
             }
             let r = ceval_block(body, envs)
-            if ceval_ret_did(r) != 0 { return r }
+            let k = ceval_ret_kind(r)
+            if k == 1 { return r }
+            if k == 2 { return ceval_ret_pair(0, 0) }
             let start = start + 1
         }
         return ceval_ret_pair(0, 0)
@@ -2042,7 +2092,7 @@ fn ceval_block(block, envs) {
     let n = list_len(stmts)
     while i < n {
         let r = ceval_stmt(list_get(stmts, i), envs)
-        if ceval_ret_did(r) != 0 { return r }
+        if ceval_ret_kind(r) != 0 { return r }
         let i = i + 1
     }
     return ceval_ret_pair(0, 0)

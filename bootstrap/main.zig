@@ -8,6 +8,13 @@ const Value = union(enum) {
     str: []const u8,
 };
 
+const Control = union(enum) {
+    none,
+    ret: Value,
+    brk,
+    cont,
+};
+
 fn makeInt(v: i64) Value {
     return .{ .int = v };
 }
@@ -223,6 +230,8 @@ const Token = struct {
         keyword_null,
         keyword_for,
         keyword_in,
+        keyword_break,
+        keyword_continue,
         l_paren,
         r_paren,
         l_brace,
@@ -472,10 +481,16 @@ fn runFunction(name: []const u8, args: []const Value, caller_env: *Env) Value {
     var has_result = false;
 
     while (peek().kind != .eof) {
-        if (evalStmt(local_env)) |ret| {
-            result = ret;
-            has_result = true;
-            break;
+        const ctrl = evalStmt(local_env);
+        switch (ctrl) {
+            .none => {},
+            .ret => |ret| {
+                result = ret;
+                has_result = true;
+                break;
+            },
+            .brk => @panic("break outside loop"),
+            .cont => @panic("continue outside loop"),
         }
     }
 
@@ -882,13 +897,17 @@ fn renderString(env: *Env, raw: []const u8) void {
     }
 }
 
-fn execBlock(env: *Env) ?Value {
+fn execBlock(env: *Env) Control {
     consume(.l_brace);
     while (peek().kind != .r_brace and peek().kind != .eof) {
-        if (evalStmt(env)) |ret| return ret;
+        const ctrl = evalStmt(env);
+        switch (ctrl) {
+            .none => {},
+            else => return ctrl,
+        }
     }
     if (peek().kind == .r_brace) consume(.r_brace);
-    return null;
+    return .none;
 }
 
 fn skipBlock() void {
@@ -904,7 +923,7 @@ fn skipBlock() void {
     }
 }
 
-fn evalStmt(env: *Env) ?Value {
+fn evalStmt(env: *Env) Control {
     const t = peek();
 
     switch (t.kind) {
@@ -915,7 +934,11 @@ fn evalStmt(env: *Env) ?Value {
             if (peek().kind != .l_brace) @panic("if: expected {");
 
             if (cond != 0) {
-                if (execBlock(env)) |ret| return ret;
+                const ctrl = execBlock(env);
+                switch (ctrl) {
+                    .none => {},
+                    else => return ctrl,
+                }
 
                 if (peek().kind == .keyword_else) {
                     _ = advance(); // 'else'
@@ -928,12 +951,24 @@ fn evalStmt(env: *Env) ?Value {
                 if (peek().kind == .keyword_else) {
                     _ = advance(); // 'else'
                     if (peek().kind != .l_brace) @panic("else: expected {");
-                    if (execBlock(env)) |ret| return ret;
+                    const ctrl = execBlock(env);
+                    switch (ctrl) {
+                        .none => {},
+                        else => return ctrl,
+                    }
                 }
             }
         },
         .keyword_else => {
             @panic("else without if");
+        },
+        .keyword_break => {
+            _ = advance(); // 'break'
+            return .brk;
+        },
+        .keyword_continue => {
+            _ = advance(); // 'continue'
+            return .cont;
         },
         .keyword_for => {
             _ = advance(); // 'for'
@@ -974,9 +1009,18 @@ fn evalStmt(env: *Env) ?Value {
             while (idx < end) : (idx += 1) {
                 env.set(name_tok.text, makeInt(idx));
                 pos = body_start;
-                if (execBlock(env)) |ret| {
-                    pos = body_end;
-                    return ret;
+                const ctrl = execBlock(env);
+                switch (ctrl) {
+                    .none => {},
+                    .ret => |ret| {
+                        pos = body_end;
+                        return .{ .ret = ret };
+                    },
+                    .brk => {
+                        pos = body_end;
+                        return .none;
+                    },
+                    .cont => {},
                 }
             }
 
@@ -1014,9 +1058,18 @@ fn evalStmt(env: *Env) ?Value {
 
             while (cond != 0) {
                 pos = body_start;
-                if (execBlock(env)) |ret| {
-                    pos = body_end;
-                    return ret;
+                const ctrl = execBlock(env);
+                switch (ctrl) {
+                    .none => {},
+                    .ret => |ret| {
+                        pos = body_end;
+                        return .{ .ret = ret };
+                    },
+                    .brk => {
+                        pos = body_end;
+                        return .none;
+                    },
+                    .cont => {},
                 }
 
                 pos = cond_start;
@@ -1061,10 +1114,10 @@ fn evalStmt(env: *Env) ?Value {
         .keyword_return => {
             _ = advance(); // 'return'
             if (peek().kind == .eof or peek().kind == .r_brace) {
-                return makeInt(0);
+                return .{ .ret = makeInt(0) };
             }
             const val = evalExpr(env);
-            return val;
+            return .{ .ret = val };
         },
         .identifier => {
             if (pos + 1 < tokens.len and tokens[pos + 1].kind == .l_bracket) {
@@ -1103,7 +1156,7 @@ fn evalStmt(env: *Env) ?Value {
                         }
 
                         builtinListSet(list_handle, idx_val, new_val);
-                        return null;
+                        return .none;
                     }
                 }
             }
@@ -1123,7 +1176,7 @@ fn evalStmt(env: *Env) ?Value {
                     }
 
                     env.set(name_tok.text, new_val);
-                    return null;
+                    return .none;
                 }
             }
 
@@ -1137,7 +1190,7 @@ fn evalStmt(env: *Env) ?Value {
         },
     }
 
-    return null;
+    return .none;
 }
 
 pub fn main() !void {
@@ -1429,6 +1482,8 @@ pub fn main() !void {
                 else if (std.mem.eql(u8, word, "null")) .keyword_null
                 else if (std.mem.eql(u8, word, "for")) .keyword_for
                 else if (std.mem.eql(u8, word, "in")) .keyword_in
+                else if (std.mem.eql(u8, word, "break")) .keyword_break
+                else if (std.mem.eql(u8, word, "continue")) .keyword_continue
                 else .identifier;
             try list.append(.{
                 .kind = kind,
@@ -1461,7 +1516,13 @@ pub fn main() !void {
             .keyword_fn => parseFunction(false),
             .eof => {},
             else => {
-                _ = evalStmt(global_env);
+                const ctrl = evalStmt(global_env);
+                switch (ctrl) {
+                    .none => {},
+                    .ret => @panic("return outside function"),
+                    .brk => @panic("break outside loop"),
+                    .cont => @panic("continue outside loop"),
+                }
                 if (verbose and peek().kind != .eof) {
                     print("\n", .{});
                 }
