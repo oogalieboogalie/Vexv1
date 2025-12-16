@@ -358,6 +358,7 @@ fn strip_quotes(s) {
 //          while [204, cond, body_block]
 //          assign [206, op_kind, name, expr] // op_kind: Equal or PlusEq
 //          for [207, name, start_expr, end_expr, body_block]
+//          index_assign [208, op_kind, name, index_expr, value_expr] // op_kind: Equal or PlusEq
 //          expr [205, expr]
 // Exprs:   int [300, value]
 //          str [301, value]
@@ -881,6 +882,31 @@ fn parse_stmt(toks, pos) {
         return pair(block, pos)
     }
 
+    // name[idx] = expr / name[idx] += expr
+    if k == 1 and tok_kind(toks, pos + 1) == 37 {
+        let name = tok_text(toks, pos)
+
+        let ir = parse_expr(toks, pos + 2)
+        let idx_expr = pair_node(ir)
+        let pos = pair_pos(ir)
+        if tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+
+        let op = tok_kind(toks, pos)
+        if op == 15 or op == 30 {
+            let vr = parse_expr(toks, pos + 1)
+            let val_expr = pair_node(vr)
+            let pos = pair_pos(vr)
+
+            let node = list_create()
+            list_push(node, 208)
+            list_push(node, op)
+            list_push(node, name)
+            list_push(node, idx_expr)
+            list_push(node, val_expr)
+            return pair(node, pos)
+        }
+    }
+
     // name = expr / name += expr
     if k == 1 {
         let name = tok_text(toks, pos)
@@ -1142,6 +1168,10 @@ fn call3(name, a0, a1, a2, argc, func_env, vals_env, defs_env, prog_args) {
     }
     if str_eq(name, "list_len") { return list_len(a0) }
     if str_eq(name, "list_get") { return list_get(a0, a1) }
+    if str_eq(name, "list_set") {
+        list_set(a0, a1, a2)
+        return 0
+    }
 
     if str_eq(name, "read_file") { return read_file(a0) }
     if str_eq(name, "write_file") {
@@ -1298,6 +1328,18 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
             env_set(vals_env, name, out)
             env_set(defs_env, name, 1)
         }
+        return ret_pair(0, 0)
+    }
+
+    if tag == 208 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let idx = eval_expr(list_get(stmt, 3), func_env, vals_env, defs_env, prog_args)
+        let rhs = eval_expr(list_get(stmt, 4), func_env, vals_env, defs_env, prog_args)
+        let list_handle = env_find(vals_env, name)
+        let out = rhs
+        if op == 30 { let out = call3("list_get", list_handle, idx, 0, 2, func_env, vals_env, defs_env, prog_args) + out }
+        call3("list_set", list_handle, idx, out, 3, func_env, vals_env, defs_env, prog_args)
         return ret_pair(0, 0)
     }
 
@@ -1476,6 +1518,16 @@ fn dump_stmt(stmt, depth, max_depth) {
         if op == 30 { print("AddAssign {name}\n") }
         if op != 30 { print("Assign {name}\n") }
         dump_expr(list_get(stmt, 3), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 208 {
+        indent(depth)
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        if op == 30 { print("IndexAddAssign {name}\n") }
+        if op != 30 { print("IndexAssign {name}\n") }
+        dump_expr(list_get(stmt, 3), depth + 1, max_depth)
+        dump_expr(list_get(stmt, 4), depth + 1, max_depth)
         return 0
     }
     if tag == 201 {
@@ -1682,6 +1734,10 @@ fn ceval_call_value(name, args, envs) {
     }
     if str_eq(name, "list_len") { return list_len(list_get(args, 0)) }
     if str_eq(name, "list_get") { return list_get(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "list_set") {
+        list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
 
     if str_eq(name, "read_file") { return read_file(list_get(args, 0)) }
     if str_eq(name, "write_file") {
@@ -1906,6 +1962,18 @@ fn ceval_stmt(stmt, envs) {
             env_set(ceval_env_vals(envs), name, out)
             env_set(ceval_env_defs(envs), name, 1)
         }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 208 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let idx = ceval_expr(list_get(stmt, 3), envs)
+        let rhs = ceval_expr(list_get(stmt, 4), envs)
+        let list_handle = env_find(ceval_env_vals(envs), name)
+        let out = rhs
+        if op == 30 { let out = list_get(list_handle, idx) + out }
+        list_set(list_handle, idx, out)
         return ceval_ret_pair(0, 0)
     }
 

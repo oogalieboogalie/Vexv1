@@ -27,6 +27,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`
 - Assignment + literals demo (`=`, `+=`, `true/false/null`): `zig build run -- examples/assign.vex` and `zig build run -- eval examples/assign.vex`
 - For + indexing demo (`for i in a..b`, `xs[i]`): `zig build run -- examples/for_index.vex` and `zig build run -- eval examples/for_index.vex`
+- Index assignment demo (`xs[i] = v`, `xs[i] += v`): `zig build run -- examples/index_assign.vex` and `zig build run -- eval examples/index_assign.vex`
 - Verbose interpreter logs: `zig build run -- --verbose examples/hello.vex`
 - CLI help: `zig build run -- --help`
 
@@ -37,6 +38,7 @@ See `examples/` for small programs you can modify while iterating on the languag
 - Statements: `let`, assignment (`=` / `+=`), `print`, `fn`, `return`, `if`/`else`, `while`, `for i in a..b { ... }`
 - Calls: arbitrary arity; builtins for env, strings, lists, filesystem IO, argv
 - Indexing: `xs[i]` lowers to `list_get(xs, i)`
+- Index assignment: `xs[i] = v` / `xs[i] += v` lowers to `list_set(xs, i, ...)`
 - Literals: `true`, `false`, `null`
 - Strings: interpolation like `"fib = {fib(16)}\n"` plus `==` / `!=`
 - Records: `obj.field` lowers to `env_find(obj, "field")`; `.name` yields `"name"`

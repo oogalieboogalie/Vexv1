@@ -131,6 +131,24 @@ fn builtinListGet(list_handle: Value, idx_value: Value) Value {
     return list_ptr.items.items[idx];
 }
 
+fn builtinListSet(list_handle: Value, idx_value: Value, value: Value) void {
+    if (isZeroInt(list_handle)) return;
+    const addr = @as(usize, @intCast(expectInt(list_handle)));
+    const list_ptr = @as(*VexList, @ptrFromInt(addr));
+    const idx_signed = expectInt(idx_value);
+    if (idx_signed < 0) return;
+    const idx: usize = @intCast(idx_signed);
+
+    if (idx < list_ptr.items.items.len) {
+        list_ptr.items.items[idx] = value;
+        return;
+    }
+
+    if (idx == list_ptr.items.items.len) {
+        list_ptr.items.append(value) catch @panic("oom");
+    }
+}
+
 fn builtinReadFile(path: []const u8) Value {
     const bytes = std.fs.cwd().readFileAlloc(allocator, path, 16 * 1024 * 1024) catch @panic("read_file failed");
     return .{ .str = bytes };
@@ -560,6 +578,12 @@ fn evalPrimary(env: *Env) Value {
             const list_handle = if (args.len > 0) args[0] else makeInt(0);
             const idx_val = if (args.len > 1) args[1] else makeInt(0);
             result = builtinListGet(list_handle, idx_val);
+        } else if (std.mem.eql(u8, name, "list_set")) {
+            const list_handle = if (args.len > 0) args[0] else makeInt(0);
+            const idx_val = if (args.len > 1) args[1] else makeInt(0);
+            const v = if (args.len > 2) args[2] else makeInt(0);
+            builtinListSet(list_handle, idx_val, v);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "read_file")) {
             const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
             result = builtinReadFile(path);
@@ -1043,6 +1067,47 @@ fn evalStmt(env: *Env) ?Value {
             return val;
         },
         .identifier => {
+            if (pos + 1 < tokens.len and tokens[pos + 1].kind == .l_bracket) {
+                var scan_pos: usize = pos + 1;
+                var depth: usize = 0;
+                while (scan_pos < tokens.len) : (scan_pos += 1) {
+                    switch (tokens[scan_pos].kind) {
+                        .l_bracket => depth += 1,
+                        .r_bracket => {
+                            depth -= 1;
+                            if (depth == 0) break;
+                        },
+                        else => {},
+                    }
+                }
+
+                if (depth == 0 and scan_pos + 1 < tokens.len) {
+                    const after_kind = tokens[scan_pos + 1].kind;
+                    if (after_kind == .equal or after_kind == .plus_equal) {
+                        const name_tok = advance();
+                        const list_handle = env.get(name_tok.text) orelse makeInt(0);
+
+                        consume(.l_bracket);
+                        const idx_val = evalExpr(env);
+                        consume(.r_bracket);
+
+                        const op_kind = advance().kind;
+                        const rhs = evalExpr(env);
+
+                        var new_val = rhs;
+                        if (op_kind == .plus_equal) {
+                            const old = builtinListGet(list_handle, idx_val);
+                            const lhs = expectInt(old);
+                            const add = expectInt(rhs);
+                            new_val = makeInt(lhs + add);
+                        }
+
+                        builtinListSet(list_handle, idx_val, new_val);
+                        return null;
+                    }
+                }
+            }
+
             if (pos + 1 < tokens.len) {
                 const next_kind = tokens[pos + 1].kind;
                 if (next_kind == .equal or next_kind == .plus_equal) {
