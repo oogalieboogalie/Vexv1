@@ -1,0 +1,13 @@
+fn main() {
+    let xs = list_create()
+    list_push(xs, 10)
+    list_push(xs, 20)
+    list_push(xs, 30)
+
+    let sum = 0
+    for i in 0..list_len(xs) {
+        sum += xs[i]
+    }
+
+    print("sum={sum}\n")
+}

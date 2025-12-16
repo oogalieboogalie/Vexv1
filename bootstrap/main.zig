@@ -203,11 +203,16 @@ const Token = struct {
         keyword_true,
         keyword_false,
         keyword_null,
+        keyword_for,
+        keyword_in,
         l_paren,
         r_paren,
         l_brace,
         r_brace,
+        l_bracket,
+        r_bracket,
         dot,
+        dot_dot,
         equal,
         equal_equal,
         bang_equal,
@@ -591,15 +596,29 @@ fn evalPrimary(env: *Env) Value {
     }
 
     // member access: obj.field -> env_find(obj, "field")
-    while (peek().kind == .dot) {
-        _ = advance(); // '.'
-        const field_tok = advance();
-        if (field_tok.kind != .identifier) @panic("member access: expected identifier");
-        if (builtinEnvFind(result, field_tok.text)) |v| {
-            result = v;
-        } else {
-            result = makeInt(0);
+    // indexing: xs[i] -> list_get(xs, i)
+    while (true) {
+        if (peek().kind == .dot) {
+            _ = advance(); // '.'
+            const field_tok = advance();
+            if (field_tok.kind != .identifier) @panic("member access: expected identifier");
+            if (builtinEnvFind(result, field_tok.text)) |v| {
+                result = v;
+            } else {
+                result = makeInt(0);
+            }
+            continue;
         }
+
+        if (peek().kind == .l_bracket) {
+            _ = advance(); // '['
+            const idx = evalExpr(env);
+            consume(.r_bracket);
+            result = builtinListGet(result, idx);
+            continue;
+        }
+
+        break;
     }
 
     return result;
@@ -892,6 +911,53 @@ fn evalStmt(env: *Env) ?Value {
         .keyword_else => {
             @panic("else without if");
         },
+        .keyword_for => {
+            _ = advance(); // 'for'
+            const name_tok = advance();
+            if (name_tok.kind != .identifier) @panic("for: expected identifier");
+            if (peek().kind != .keyword_in) @panic("for: expected in");
+            _ = advance(); // 'in'
+
+            var idx = expectInt(evalExpr(env));
+            if (peek().kind != .dot_dot) @panic("for: expected ..");
+            _ = advance(); // '..'
+            const end = expectInt(evalExpr(env));
+
+            const body_start = pos;
+            if (peek().kind != .l_brace) @panic("for: expected {");
+
+            var scan_pos: usize = body_start;
+            var depth: usize = 0;
+            while (scan_pos < tokens.len) : (scan_pos += 1) {
+                switch (tokens[scan_pos].kind) {
+                    .l_brace => depth += 1,
+                    .r_brace => {
+                        depth -= 1;
+                        if (depth == 0) {
+                            scan_pos += 1;
+                            break;
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            const body_end = scan_pos;
+            if (body_end <= body_start or tokens[body_end - 1].kind != .r_brace) {
+                @panic("for: unterminated block");
+            }
+
+            while (idx < end) : (idx += 1) {
+                env.set(name_tok.text, makeInt(idx));
+                pos = body_start;
+                if (execBlock(env)) |ret| {
+                    pos = body_end;
+                    return ret;
+                }
+            }
+
+            pos = body_end;
+        },
         .keyword_while => {
             _ = advance(); // 'while'
 
@@ -1169,8 +1235,13 @@ pub fn main() !void {
                 continue;
             },
             '.' => {
-                try list.append(.{ .kind = .dot, .text = source[i..i+1], .line = line });
-                i += 1;
+                if (i + 1 < source.len and source[i + 1] == '.') {
+                    try list.append(.{ .kind = .dot_dot, .text = source[i..i+2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .dot, .text = source[i..i+1], .line = line });
+                    i += 1;
+                }
                 continue;
             },
             '{' => {
@@ -1180,6 +1251,16 @@ pub fn main() !void {
             },
             '}' => {
                 try list.append(.{ .kind = .r_brace, .text = source[i..i+1], .line = line });
+                i += 1;
+                continue;
+            },
+            '[' => {
+                try list.append(.{ .kind = .l_bracket, .text = source[i..i+1], .line = line });
+                i += 1;
+                continue;
+            },
+            ']' => {
+                try list.append(.{ .kind = .r_bracket, .text = source[i..i+1], .line = line });
                 i += 1;
                 continue;
             },
@@ -1281,6 +1362,8 @@ pub fn main() !void {
                 else if (std.mem.eql(u8, word, "true")) .keyword_true
                 else if (std.mem.eql(u8, word, "false")) .keyword_false
                 else if (std.mem.eql(u8, word, "null")) .keyword_null
+                else if (std.mem.eql(u8, word, "for")) .keyword_for
+                else if (std.mem.eql(u8, word, "in")) .keyword_in
                 else .identifier;
             try list.append(.{
                 .kind = kind,
