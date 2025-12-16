@@ -18,7 +18,10 @@ This is where we left off and where to go next.
   - Recursive-descent parser that builds a list-based AST.
   - Parses dot syntax: `.name` and `obj.field` (lowered to `env_find`).
   - Parses/evals assignment (`=` / `+=`), index assignment (`xs[i] = v` / `xs[i] += v`), `for i in a..b { ... }`, `break`/`continue`, `xs[i]`, and `true`/`false`/`null` literals.
-  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, and `vex eval <file.vex> [args...]`.
+  - Bytecode compiler + VM for Core Vex:
+    - `vex bc <file.vex> [args...]` compiles to bytecode and runs it.
+    - `vex bcdump <file.vex>` dumps bytecode (debug).
+  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, `vex eval <file.vex> [args...]`, `vex bc <file.vex> [args...]`, and `vex bcdump <file.vex>`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
   - Defines `TokenKind` / `Token` matching the interpreter's lexer.
@@ -73,8 +76,8 @@ This is where we left off and where to go next.
 7. Code generation path
    - Design an intermediate representation (IR) for Vex:
      - Either a small bytecode for a Vex VM, or a simple SSA-style IR.
-   - Add lowering from `ProgramAst` -> IR in `compiler.vex`.
-   - In Zig, write a small VM to execute that IR as a first non-interpreter backend.
+   - (Done for Core Vex) `compiler_core.vex` lowers AST -> bytecode and runs a bytecode VM.
+   - Next: move the VM into Zig so compiled bytecode can run without interpreting Vex.
 
 8. GPU / @accel story
    - Decide on the first real `@accel` target (CUDA via LLVM, or a simpler CPU vector path).

@@ -2120,9 +2120,725 @@ fn ceval_program(prog, prog_args) {
     return 0
 }
 
+// --- Bytecode compiler + VM (first real codegen path) ---
+// Instruction format: list [op, a?, b?]
+// Ops:
+//   1  PUSH_INT value
+//   2  PUSH_STR value
+//   3  LOAD name
+//   4  STORE name              (sets vals + defs)
+//   10 BIN op_kind             (token kind: + - * / < <= > >= == != and or)
+//   11 CALL name argc
+//   12 POP
+//   13 JMP target_ip
+//   14 JMP_Z target_ip         (pops cond; jumps if cond == 0)
+//   15 RET                     (pops value)
+//   16 PRINT                   (pops value)
+//   17 PRINT_STR raw           (renders interpolation + \\n escapes)
+//   18 DUP2                    (duplicates top 2 stack values)
+//   19 TMP_SET idx             (pops value into temp slot)
+//   20 TMP_GET idx             (pushes temp slot)
+//   99 TRAP message            (prints message + returns 0)
+
+fn bc_stack_create() {
+    let st = list_create()
+    list_push(st, list_create()) // values
+    list_push(st, 0) // sp
+    return st
+}
+
+fn bc_stack_vals(st) { return list_get(st, 0) }
+fn bc_stack_sp(st) { return list_get(st, 1) }
+
+fn bc_stack_push(st, v) {
+    let vals = bc_stack_vals(st)
+    let sp = bc_stack_sp(st)
+    let n = list_len(vals)
+    if sp < n {
+        list_set(vals, sp, v)
+    }
+    if sp == n {
+        list_push(vals, v)
+    }
+    list_set(st, 1, sp + 1)
+    return 0
+}
+
+fn bc_stack_pop(st) {
+    let vals = bc_stack_vals(st)
+    let sp = bc_stack_sp(st)
+    if sp <= 0 { return 0 }
+    let sp = sp - 1
+    list_set(st, 1, sp)
+    return list_get(vals, sp)
+}
+
+fn bc_ins0(op) {
+    let ins = list_create()
+    list_push(ins, op)
+    return ins
+}
+fn bc_ins1(op, a) {
+    let ins = list_create()
+    list_push(ins, op)
+    list_push(ins, a)
+    return ins
+}
+fn bc_ins2(op, a, b) {
+    let ins = list_create()
+    list_push(ins, op)
+    list_push(ins, a)
+    list_push(ins, b)
+    return ins
+}
+
+fn bc_emit(code, ins) {
+    list_push(code, ins)
+    return list_len(code) - 1
+}
+
+fn bc_patch_target(code, ins_idx, target) {
+    let ins = list_get(code, ins_idx)
+    list_set(ins, 1, target)
+    return 0
+}
+
+fn bc_patch_jmps(code, jmps, target) {
+    let i = 0
+    let n = list_len(jmps)
+    while i < n {
+        bc_patch_target(code, list_get(jmps, i), target)
+        let i = i + 1
+    }
+    return 0
+}
+
+fn bc_loop_ctx_create() {
+    let ctx = list_create()
+    list_push(ctx, list_create()) // breaks
+    list_push(ctx, list_create()) // continues
+    return ctx
+}
+
+fn bc_loop_breaks(ctx) { return list_get(ctx, 0) }
+fn bc_loop_conts(ctx) { return list_get(ctx, 1) }
+
+fn bc_ctx_create() {
+    let ctx = list_create()
+    list_push(ctx, 0) // next_tmp
+    return ctx
+}
+
+fn bc_alloc_tmp(ctx) {
+    let next = list_get(ctx, 0)
+    list_set(ctx, 0, next + 1)
+    return next
+}
+
+fn bc_compile_expr(expr, code, ctx) {
+    let tag = list_get(expr, 0)
+
+    if tag == 300 {
+        bc_emit(code, bc_ins1(1, list_get(expr, 1)))
+        return 0
+    }
+    if tag == 301 {
+        bc_emit(code, bc_ins1(2, list_get(expr, 1)))
+        return 0
+    }
+    if tag == 302 {
+        bc_emit(code, bc_ins1(3, list_get(expr, 1)))
+        return 0
+    }
+
+    if tag == 303 {
+        bc_compile_expr(list_get(expr, 2), code, ctx)
+        bc_compile_expr(list_get(expr, 3), code, ctx)
+        bc_emit(code, bc_ins1(10, list_get(expr, 1)))
+        return 0
+    }
+
+    if tag == 304 {
+        let name = list_get(expr, 1)
+        let args = list_get(expr, 2)
+        let i = 0
+        let n = list_len(args)
+        while i < n {
+            bc_compile_expr(list_get(args, i), code, ctx)
+            let i = i + 1
+        }
+        bc_emit(code, bc_ins2(11, name, n))
+        return 0
+    }
+
+    return 0
+}
+
+fn bc_compile_block(block, code, ctx, loop_ctx) {
+    let stmts = list_get(block, 1)
+    let i = 0
+    let n = list_len(stmts)
+    while i < n {
+        bc_compile_stmt(list_get(stmts, i), code, ctx, loop_ctx)
+        let i = i + 1
+    }
+    return 0
+}
+
+fn bc_compile_stmt(stmt, code, ctx, loop_ctx) {
+    let tag = list_get(stmt, 0)
+
+    if tag == 102 { return bc_compile_block(stmt, code, ctx, loop_ctx) }
+
+    if tag == 200 {
+        let name = list_get(stmt, 1)
+        let expr = list_get(stmt, 2)
+        bc_compile_expr(expr, code, ctx)
+        if str_len(name) != 0 { bc_emit(code, bc_ins1(4, name)) }
+        if str_len(name) == 0 { bc_emit(code, bc_ins0(12)) }
+        return 0
+    }
+
+    if tag == 206 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let expr = list_get(stmt, 3)
+
+        if op == 30 { bc_emit(code, bc_ins1(3, name)) }
+        bc_compile_expr(expr, code, ctx)
+        if op == 30 { bc_emit(code, bc_ins1(10, 18)) } // plus
+
+        if str_len(name) != 0 { bc_emit(code, bc_ins1(4, name)) }
+        if str_len(name) == 0 { bc_emit(code, bc_ins0(12)) }
+        return 0
+    }
+
+    if tag == 208 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let idx_expr = list_get(stmt, 3)
+        let val_expr = list_get(stmt, 4)
+
+        bc_emit(code, bc_ins1(3, name)) // list_handle
+        bc_compile_expr(idx_expr, code, ctx)
+
+        if op == 30 {
+            bc_emit(code, bc_ins0(18)) // DUP2
+            bc_emit(code, bc_ins2(11, "list_get", 2))
+        }
+
+        bc_compile_expr(val_expr, code, ctx)
+        if op == 30 { bc_emit(code, bc_ins1(10, 18)) } // plus
+
+        bc_emit(code, bc_ins2(11, "list_set", 3))
+        bc_emit(code, bc_ins0(12)) // POP return
+        return 0
+    }
+
+    if tag == 201 {
+        let expr = list_get(stmt, 1)
+        if list_get(expr, 0) == 301 {
+            bc_emit(code, bc_ins1(17, list_get(expr, 1)))
+        }
+        if list_get(expr, 0) != 301 {
+            bc_compile_expr(expr, code, ctx)
+            bc_emit(code, bc_ins0(16))
+        }
+        return 0
+    }
+
+    if tag == 202 {
+        let expr = list_get(stmt, 1)
+        if expr == 0 { bc_emit(code, bc_ins1(1, 0)) }
+        if expr != 0 { bc_compile_expr(expr, code, ctx) }
+        bc_emit(code, bc_ins0(15))
+        return 0
+    }
+
+    if tag == 209 {
+        if loop_ctx == 0 {
+            bc_emit(code, bc_ins1(99, "break outside loop\n"))
+            return 0
+        }
+        let j = bc_emit(code, bc_ins1(13, 0))
+        list_push(bc_loop_breaks(loop_ctx), j)
+        return 0
+    }
+
+    if tag == 210 {
+        if loop_ctx == 0 {
+            bc_emit(code, bc_ins1(99, "continue outside loop\n"))
+            return 0
+        }
+        let j = bc_emit(code, bc_ins1(13, 0))
+        list_push(bc_loop_conts(loop_ctx), j)
+        return 0
+    }
+
+    if tag == 203 {
+        bc_compile_expr(list_get(stmt, 1), code, ctx)
+        let j_false = bc_emit(code, bc_ins1(14, 0))
+        bc_compile_block(list_get(stmt, 2), code, ctx, loop_ctx)
+
+        let else_block = list_get(stmt, 3)
+        if else_block != 0 {
+            let j_end = bc_emit(code, bc_ins1(13, 0))
+            let else_ip = list_len(code)
+            bc_patch_target(code, j_false, else_ip)
+            bc_compile_block(else_block, code, ctx, loop_ctx)
+            let end_ip = list_len(code)
+            bc_patch_target(code, j_end, end_ip)
+        }
+        if else_block == 0 {
+            bc_patch_target(code, j_false, list_len(code))
+        }
+        return 0
+    }
+
+    if tag == 204 {
+        let loop_ip = list_len(code)
+        bc_compile_expr(list_get(stmt, 1), code, ctx)
+        let j_end = bc_emit(code, bc_ins1(14, 0))
+
+        let inner = bc_loop_ctx_create()
+        bc_compile_block(list_get(stmt, 2), code, ctx, inner)
+
+        bc_emit(code, bc_ins1(13, loop_ip))
+
+        let end_ip = list_len(code)
+        bc_patch_target(code, j_end, end_ip)
+        bc_patch_jmps(code, bc_loop_breaks(inner), end_ip)
+        bc_patch_jmps(code, bc_loop_conts(inner), loop_ip)
+        return 0
+    }
+
+    if tag == 207 {
+        let name = list_get(stmt, 1)
+        let start_tmp = bc_alloc_tmp(ctx)
+        let end_tmp = bc_alloc_tmp(ctx)
+
+        bc_compile_expr(list_get(stmt, 2), code, ctx)
+        bc_emit(code, bc_ins1(19, start_tmp))
+        bc_compile_expr(list_get(stmt, 3), code, ctx)
+        bc_emit(code, bc_ins1(19, end_tmp))
+
+        let loop_ip = list_len(code)
+        bc_emit(code, bc_ins1(20, start_tmp))
+        bc_emit(code, bc_ins1(20, end_tmp))
+        bc_emit(code, bc_ins1(10, 22)) // <
+        let j_end = bc_emit(code, bc_ins1(14, 0))
+
+        if str_len(name) != 0 {
+            bc_emit(code, bc_ins1(20, start_tmp))
+            bc_emit(code, bc_ins1(4, name))
+        }
+
+        let inner = bc_loop_ctx_create()
+        bc_compile_block(list_get(stmt, 4), code, ctx, inner)
+
+        let cont_ip = list_len(code)
+        bc_patch_jmps(code, bc_loop_conts(inner), cont_ip)
+
+        bc_emit(code, bc_ins1(20, start_tmp))
+        bc_emit(code, bc_ins1(1, 1))
+        bc_emit(code, bc_ins1(10, 18)) // +
+        bc_emit(code, bc_ins1(19, start_tmp))
+        bc_emit(code, bc_ins1(13, loop_ip))
+
+        let end_ip = list_len(code)
+        bc_patch_target(code, j_end, end_ip)
+        bc_patch_jmps(code, bc_loop_breaks(inner), end_ip)
+        return 0
+    }
+
+    if tag == 205 {
+        bc_compile_expr(list_get(stmt, 1), code, ctx)
+        bc_emit(code, bc_ins0(12))
+        return 0
+    }
+
+    return 0
+}
+
+fn bc_compile_func(func_node) {
+    let name = list_get(func_node, 1)
+    let params = list_get(func_node, 7)
+    let body = list_get(func_node, 6)
+
+    let ctx = bc_ctx_create()
+    let code = list_create()
+    bc_compile_block(body, code, ctx, 0)
+
+    let out = list_create()
+    list_push(out, name)
+    list_push(out, params)
+    list_push(out, code)
+    return out
+}
+
+fn bc_compile_program(prog) {
+    let funcs = list_get(prog, 1)
+    let bc_funcs = env_create(0)
+
+    let i = 0
+    let n = list_len(funcs)
+    while i < n {
+        let f = list_get(funcs, i)
+        let bc_f = bc_compile_func(f)
+        env_set(bc_funcs, list_get(f, 1), bc_f)
+        let i = i + 1
+    }
+    return bc_funcs
+}
+
+fn bc_call_value(name, args, envs, bc_funcs, prog_args) {
+    // Builtins
+    if str_eq(name, "env_create") { return env_create(list_get(args, 0)) }
+    if str_eq(name, "env_set") {
+        env_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
+    if str_eq(name, "env_find") { return env_find(list_get(args, 0), list_get(args, 1)) }
+
+    if str_eq(name, "str_len") { return str_len(list_get(args, 0)) }
+    if str_eq(name, "str_char") { return str_char(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "str_slice") { return str_slice(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+
+    if str_eq(name, "print_bytes") {
+        print_bytes(list_get(args, 0))
+        return 0
+    }
+    if str_eq(name, "print_char") {
+        print_char(list_get(args, 0))
+        return 0
+    }
+
+    if str_eq(name, "list_create") { return list_create() }
+    if str_eq(name, "list_push") {
+        list_push(list_get(args, 0), list_get(args, 1))
+        return 0
+    }
+    if str_eq(name, "list_len") { return list_len(list_get(args, 0)) }
+    if str_eq(name, "list_get") { return list_get(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "list_set") {
+        list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
+
+    if str_eq(name, "read_file") { return read_file(list_get(args, 0)) }
+    if str_eq(name, "write_file") {
+        write_file(list_get(args, 0), list_get(args, 1))
+        return 0
+    }
+
+    if str_eq(name, "arg_len") { return list_len(prog_args) }
+    if str_eq(name, "arg_get") {
+        let idx = list_get(args, 0)
+        let n = list_len(prog_args)
+        if idx < 0 { return "" }
+        if idx < n { return list_get(prog_args, idx) }
+        return ""
+    }
+
+    // User-defined
+    let f = env_find(bc_funcs, name)
+    if f == 0 {
+        print("[undefined function] {name}\n")
+        return 0
+    }
+    return bc_exec_func(f, args, envs, bc_funcs, prog_args)
+}
+
+fn bc_render_string(raw, envs, bc_funcs, prog_args) {
+    let vals_env = ceval_env_vals(envs)
+    let defs_env = ceval_env_defs(envs)
+
+    let i = 0
+    let n = str_len(raw)
+    while i < n {
+        let c = str_char(raw, i)
+
+        if c == 123 {
+            let j = i + 1
+            while j < n and str_char(raw, j) != 125 { let j = j + 1 }
+
+            if j < n {
+                let expr = str_slice(raw, i + 1, j)
+                let k = 0
+                let elen = str_len(expr)
+
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+                let start_name = k
+                while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                let name = str_slice(expr, start_name, k)
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                let did_call = 0
+
+                // func call: {name(16)} or {name(x)}
+                if k < elen and str_char(expr, k) == 40 {
+                    let did_call = 1
+                    let k = k + 1
+                    while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                    let arg_val = 0
+                    let parsed_num = 0
+
+                    if k < elen and is_digit_char(str_char(expr, k)) != 0 {
+                        let start = k
+                        while k < elen and is_digit_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_val = parse_int(str_slice(expr, start, k))
+                        let parsed_num = 1
+                    }
+
+                    if parsed_num == 0 {
+                        let start = k
+                        while k < elen and is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_name = str_slice(expr, start, k)
+                        let arg_val = env_find(vals_env, arg_name)
+                    }
+
+                    let args = list_create()
+                    list_push(args, arg_val)
+                    let v = bc_call_value(name, args, envs, bc_funcs, prog_args)
+                    print(v)
+                }
+
+                // variable: {x}
+                if did_call == 0 {
+                    let def = env_find(defs_env, name)
+                    if def != 0 {
+                        let v = env_find(vals_env, name)
+                        print(v)
+                    }
+                    if def == 0 {
+                        print_char(123)
+                        print_bytes(name)
+                        print_char(125)
+                    }
+                }
+
+                let i = j + 1
+            }
+
+            if j >= n {
+                print_char(123)
+                let i = i + 1
+            }
+        }
+
+        if c != 123 {
+            let handled = 0
+            if c == 92 and (i + 1) < n and str_char(raw, i + 1) == 110 {
+                print_char(10)
+                let i = i + 2
+                let handled = 1
+            }
+            if handled == 0 {
+                print_char(c)
+                let i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
+fn bc_exec_func(func_rec, args, caller_envs, bc_funcs, prog_args) {
+    let parent_vals = ceval_env_vals(caller_envs)
+    let parent_defs = ceval_env_defs(caller_envs)
+
+    let vals = env_create(parent_vals)
+    let defs = env_create(parent_defs)
+    let envs = pair(vals, defs)
+
+    let params = list_get(func_rec, 1)
+    let argc = list_len(args)
+    let i = 0
+    let n = list_len(params)
+    while i < n {
+        let p = list_get(params, i)
+        if str_len(p) != 0 {
+            let v = 0
+            if i < argc { let v = list_get(args, i) }
+            env_set(vals, p, v)
+            env_set(defs, p, 1)
+        }
+        let i = i + 1
+    }
+
+    let code = list_get(func_rec, 2)
+    let ip = 0
+    let ncode = list_len(code)
+
+    let st = bc_stack_create()
+    let tmps = list_create()
+
+    while ip < ncode {
+        let ins = list_get(code, ip)
+        let op = list_get(ins, 0)
+
+        if op == 1 { bc_stack_push(st, list_get(ins, 1)); let ip = ip + 1 }
+        if op == 2 { bc_stack_push(st, list_get(ins, 1)); let ip = ip + 1 }
+
+        if op == 3 {
+            bc_stack_push(st, env_find(vals, list_get(ins, 1)))
+            let ip = ip + 1
+        }
+
+        if op == 4 {
+            let name = list_get(ins, 1)
+            let v = bc_stack_pop(st)
+            if str_len(name) != 0 {
+                env_set(vals, name, v)
+                env_set(defs, name, 1)
+            }
+            let ip = ip + 1
+        }
+
+        if op == 10 {
+            let k = list_get(ins, 1)
+            let rhs = bc_stack_pop(st)
+            let lhs = bc_stack_pop(st)
+            let out = 0
+
+            if k == 18 { let out = lhs + rhs }
+            if k == 19 { let out = lhs - rhs }
+            if k == 20 { let out = lhs * rhs }
+            if k == 21 { let out = lhs / rhs }
+
+            if k == 22 { if lhs < rhs { let out = 1 } }
+            if k == 23 { if lhs <= rhs { let out = 1 } }
+            if k == 26 { if lhs > rhs { let out = 1 } }
+            if k == 27 { if lhs >= rhs { let out = 1 } }
+            if k == 16 { if lhs == rhs { let out = 1 } }
+            if k == 17 { if lhs != rhs { let out = 1 } }
+            if k == 24 { if lhs != 0 and rhs != 0 { let out = 1 } }
+            if k == 25 { if lhs != 0 or rhs != 0 { let out = 1 } }
+
+            bc_stack_push(st, out)
+            let ip = ip + 1
+        }
+
+        if op == 11 {
+            let name = list_get(ins, 1)
+            let narg = list_get(ins, 2)
+            let tmp = list_create()
+            let i = 0
+            while i < narg {
+                list_push(tmp, bc_stack_pop(st))
+                let i = i + 1
+            }
+
+            let call_args = list_create()
+            let i = narg - 1
+            while 0 <= i {
+                list_push(call_args, list_get(tmp, i))
+                let i = i - 1
+            }
+
+            bc_stack_push(st, bc_call_value(name, call_args, envs, bc_funcs, prog_args))
+            let ip = ip + 1
+        }
+
+        if op == 12 { _ = bc_stack_pop(st); let ip = ip + 1 }
+
+        if op == 13 { let ip = list_get(ins, 1) }
+
+        if op == 14 {
+            let cond = bc_stack_pop(st)
+            if cond == 0 { let ip = list_get(ins, 1) }
+            if cond != 0 { let ip = ip + 1 }
+        }
+
+        if op == 15 { return bc_stack_pop(st) }
+
+        if op == 16 {
+            print(bc_stack_pop(st))
+            let ip = ip + 1
+        }
+
+        if op == 17 {
+            bc_render_string(list_get(ins, 1), envs, bc_funcs, prog_args)
+            let ip = ip + 1
+        }
+
+        if op == 18 {
+            let sp = bc_stack_sp(st)
+            if sp < 2 {
+                print_bytes("dup2 underflow\n")
+                return 0
+            }
+            let stack_vals = bc_stack_vals(st)
+            let a = list_get(stack_vals, sp - 2)
+            let b = list_get(stack_vals, sp - 1)
+            bc_stack_push(st, a)
+            bc_stack_push(st, b)
+            let ip = ip + 1
+        }
+
+        if op == 19 {
+            list_set(tmps, list_get(ins, 1), bc_stack_pop(st))
+            let ip = ip + 1
+        }
+
+        if op == 20 {
+            bc_stack_push(st, list_get(tmps, list_get(ins, 1)))
+            let ip = ip + 1
+        }
+
+        if op == 99 {
+            print_bytes(list_get(ins, 1))
+            return 0
+        }
+    }
+
+    return 0
+}
+
+fn bc_run_program(bc_funcs, prog_args) {
+    let main = env_find(bc_funcs, "main")
+    if main == 0 {
+        print("[no main]\n")
+        return 0
+    }
+
+    let vals = env_create(0)
+    let defs = env_create(0)
+    let envs = pair(vals, defs)
+    let args = list_create()
+    _ = bc_exec_func(main, args, envs, bc_funcs, prog_args)
+    return 0
+}
+
+fn bc_dump_program(prog, bc_funcs) {
+    let funcs = list_get(prog, 1)
+    let i = 0
+    let n = list_len(funcs)
+    while i < n {
+        let f = list_get(funcs, i)
+        let name = list_get(f, 1)
+        let rec = env_find(bc_funcs, name)
+        print("fn {name}\n")
+        let code = list_get(rec, 2)
+        let ip = 0
+        let ncode = list_len(code)
+        while ip < ncode {
+            let ins = list_get(code, ip)
+            let op = list_get(ins, 0)
+            print("  {ip}: op={op}\n")
+            let ip = ip + 1
+        }
+        print("\n")
+        let i = i + 1
+    }
+    return 0
+}
+
 fn main() {
     let do_parse = 0
     let do_eval = 0
+    let do_bc = 0
+    let do_bcdump = 0
     let dump_tree = 0
     let path = "src/vex.vex"
     if 1 < arg_len() {
@@ -2141,11 +2857,21 @@ fn main() {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
+        if str_eq(first, "bc") {
+            let do_bc = 1
+            if 2 < arg_len() { let path = arg_get(2) }
+        }
+
+        if str_eq(first, "bcdump") {
+            let do_bcdump = 1
+            if 2 < arg_len() { let path = arg_get(2) }
+        }
+
         if do_parse == 0 and do_eval == 0 and str_eq(first, "lex") {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
-        if do_parse == 0 and do_eval == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 {
+        if do_parse == 0 and do_eval == 0 and do_bc == 0 and do_bcdump == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 and str_eq(first, "bc") == 0 and str_eq(first, "bcdump") == 0 {
             let path = first
         }
     }
@@ -2170,6 +2896,27 @@ fn main() {
             let i = i + 1
         }
         ceval_program(prog, prog_args)
+        return
+    }
+
+    if do_bc == 1 {
+        let prog = parse_program(toks)
+        let prog_args = list_create()
+        list_push(prog_args, path)
+        let i = 3
+        while i < arg_len() {
+            list_push(prog_args, arg_get(i))
+            let i = i + 1
+        }
+        let bc_funcs = bc_compile_program(prog)
+        bc_run_program(bc_funcs, prog_args)
+        return
+    }
+
+    if do_bcdump == 1 {
+        let prog = parse_program(toks)
+        let bc_funcs = bc_compile_program(prog)
+        bc_dump_program(prog, bc_funcs)
         return
     }
 
