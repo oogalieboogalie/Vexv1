@@ -1,0 +1,25 @@
+fn main() {
+    let x = 10
+    x = x + 1
+    x += 2
+
+    let t = true
+    let f = false
+    let n = null
+
+    print("x={x} t={t} f={f} n={n}\n")
+
+    if true {
+        print("true branch\n")
+    }
+
+    if false {
+        print("unreachable\n")
+    } else {
+        print("else branch\n")
+    }
+
+    if n == null {
+        print("null == null\n")
+    }
+}

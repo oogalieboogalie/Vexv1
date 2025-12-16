@@ -25,6 +25,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Eval a file using Vex code (self-hosting step): `zig build run -- eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`
+- Assignment + literals demo (`=`, `+=`, `true/false/null`): `zig build run -- examples/assign.vex` and `zig build run -- eval examples/assign.vex`
 - Verbose interpreter logs: `zig build run -- --verbose examples/hello.vex`
 - CLI help: `zig build run -- --help`
 
@@ -32,8 +33,9 @@ See `examples/` for small programs you can modify while iterating on the languag
 
 ## Core Vex (today)
 
-- Statements: `let`, `print`, `fn`, `return`, `if`/`else`, `while`
+- Statements: `let`, assignment (`=` / `+=`), `print`, `fn`, `return`, `if`/`else`, `while`
 - Calls: arbitrary arity; builtins for env, strings, lists, filesystem IO, argv
+- Literals: `true`, `false`, `null`
 - Strings: interpolation like `"fib = {fib(16)}\n"` plus `==` / `!=`
 - Records: `obj.field` lowers to `env_find(obj, "field")`; `.name` yields `"name"`
 

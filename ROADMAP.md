@@ -6,7 +6,7 @@ This is where we left off and where to go next.
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
   - Requires a system Zig `0.13.x` install (not vendored in this repo).
-  - Executes Core Vex: `let`, `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`.
+  - Executes Core Vex: `let`, assignment (`=` / `+=`), `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`, `true`/`false`/`null`.
   - Operators: `+ - * /`, `< <= > >=`, `== !=` (ints + strings), `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
@@ -17,6 +17,7 @@ This is where we left off and where to go next.
   - `tokenize(src)` implemented in Vex.
   - Recursive-descent parser that builds a list-based AST.
   - Parses dot syntax: `.name` and `obj.field` (lowered to `env_find`).
+  - Parses/evals assignment (`=` / `+=`) and `true`/`false`/`null` literals.
   - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, and `vex eval <file.vex> [args...]`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
@@ -39,10 +40,8 @@ This is where we left off and where to go next.
 2. Collapse `compiler.vex` to Core Vex
    - Preferred bootstrap path: keep Core minimal and only add the syntax/runtime features that unblock compiling/running the real compiler.
    - The big missing pieces for `src/compiler.vex` are mostly syntax:
-     - Assignment statements (`x = expr`) and update assignment (`x += expr`)
-     - `true` / `false` / `null` literals (or a clean equivalent)
-     - `for` loops (or a desugaring rule to `while`) plus `break`/`continue`
-     - Indexing (`xs[i]`) or a first-class slice/list abstraction
+      - `for` loops (or a desugaring rule to `while`) plus `break`/`continue`
+      - Indexing (`xs[i]`) or a first-class slice/list abstraction
    - Once those land, focus shifts to pushing more of `src/compiler.vex` through `eval` without “throwaway” ports.
 
 3. Mirror AST in Zig

@@ -65,6 +65,7 @@ fn kind_name(k) {
     if k == 16 { return "EqEq" }
     if k == 17 { return "BangEq" }
     if k == 18 { return "Plus" }
+    if k == 30 { return "PlusEq" }
     if k == 19 { return "Minus" }
     if k == 20 { return "Star" }
     if k == 21 { return "Slash" }
@@ -76,6 +77,9 @@ fn kind_name(k) {
     if k == 27 { return "GreaterEq" }
     if k == 28 { return "Else" }
     if k == 29 { return "Dot" }
+    if k == 31 { return "True" }
+    if k == 32 { return "False" }
+    if k == 33 { return "Null" }
     return "Unknown"
 }
 
@@ -140,11 +144,14 @@ fn tokenize(src) {
         }
         if kind == 1 and len == 4 {
             if str_char(src, start + 0) == 101 and str_char(src, start + 1) == 108 and str_char(src, start + 2) == 115 and str_char(src, start + 3) == 101 { let kind = 28 } // else
+            if str_char(src, start + 0) == 116 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 117 and str_char(src, start + 3) == 101 { let kind = 31 } // true
+            if str_char(src, start + 0) == 110 and str_char(src, start + 1) == 117 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 108 { let kind = 33 } // null
         }
         if kind == 1 and len == 5 {
             if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
             if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
             if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
+            if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 97 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 115 and str_char(src, start + 4) == 101 { let kind = 32 } // false
         }
             if kind == 1 and len == 6 {
                 if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
@@ -162,7 +169,22 @@ fn tokenize(src) {
         if handled == 0 and c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 46 { list_push(toks, 29); list_push(toks, "."); let i = i + 1; let handled = 1 }
 
-        if handled == 0 and c == 43 { list_push(toks, 18); list_push(toks, "+"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 43 {
+            let is_peq = 0
+            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_peq = 1 }
+
+            if is_peq == 1 {
+                list_push(toks, 30)
+                list_push(toks, "+=")
+                let i = i + 2
+            }
+            if is_peq == 0 {
+                list_push(toks, 18)
+                list_push(toks, "+")
+                let i = i + 1
+            }
+            let handled = 1
+        }
         if handled == 0 and c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; let handled = 1 }
@@ -310,6 +332,7 @@ fn strip_quotes(s) {
 //          return [202, expr_or_0]
 //          if [203, cond, then_block, else_block_or_0]
 //          while [204, cond, body_block]
+//          assign [206, op_kind, name, expr] // op_kind: Equal or PlusEq
 //          expr [205, expr]
 // Exprs:   int [300, value]
 //          str [301, value]
@@ -326,6 +349,25 @@ fn make_block(stmts) {
 
 fn parse_primary(toks, pos) {
     let k = tok_kind(toks, pos)
+
+    if k == 31 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 1)
+        return pair(node, pos + 1)
+    }
+    if k == 32 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 0)
+        return pair(node, pos + 1)
+    }
+    if k == 33 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 0)
+        return pair(node, pos + 1)
+    }
 
     if k == 2 {
         let txt = tok_text(toks, pos)
@@ -738,6 +780,24 @@ fn parse_stmt(toks, pos) {
         return pair(block, pos)
     }
 
+    // name = expr / name += expr
+    if k == 1 {
+        let name = tok_text(toks, pos)
+        let op = tok_kind(toks, pos + 1)
+        if op == 15 or op == 30 {
+            let r = parse_expr(toks, pos + 2)
+            let expr = pair_node(r)
+            let pos = pair_pos(r)
+
+            let node = list_create()
+            list_push(node, 206)
+            list_push(node, op)
+            list_push(node, name)
+            list_push(node, expr)
+            return pair(node, pos)
+        }
+    }
+
     // Fallback: expression statement.
     let r = parse_expr(toks, pos)
     let expr = pair_node(r)
@@ -1126,6 +1186,20 @@ fn eval_stmt(stmt, func_env, vals_env, defs_env, prog_args) {
         return ret_pair(0, 0)
     }
 
+    if tag == 206 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let expr = list_get(stmt, 3)
+        let rhs = eval_expr(expr, func_env, vals_env, defs_env, prog_args)
+        let out = rhs
+        if op == 30 { let out = env_find(vals_env, name) + out }
+        if str_len(name) != 0 {
+            env_set(vals_env, name, out)
+            env_set(defs_env, name, 1)
+        }
+        return ret_pair(0, 0)
+    }
+
     if tag == 201 {
         let expr = list_get(stmt, 1)
         if list_get(expr, 0) == 301 {
@@ -1275,6 +1349,15 @@ fn dump_stmt(stmt, depth, max_depth) {
         let name = list_get(stmt, 1)
         print("Let {name}\n")
         dump_expr(list_get(stmt, 2), depth + 1, max_depth)
+        return 0
+    }
+    if tag == 206 {
+        indent(depth)
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        if op == 30 { print("AddAssign {name}\n") }
+        if op != 30 { print("Assign {name}\n") }
+        dump_expr(list_get(stmt, 3), depth + 1, max_depth)
         return 0
     }
     if tag == 201 {
@@ -1681,6 +1764,19 @@ fn ceval_stmt(stmt, envs) {
         let v = ceval_expr(list_get(stmt, 2), envs)
         if str_len(name) != 0 {
             env_set(ceval_env_vals(envs), name, v)
+            env_set(ceval_env_defs(envs), name, 1)
+        }
+        return ceval_ret_pair(0, 0)
+    }
+
+    if tag == 206 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let rhs = ceval_expr(list_get(stmt, 3), envs)
+        let out = rhs
+        if op == 30 { let out = env_find(ceval_env_vals(envs), name) + out }
+        if str_len(name) != 0 {
+            env_set(ceval_env_vals(envs), name, out)
             env_set(ceval_env_defs(envs), name, 1)
         }
         return ceval_ret_pair(0, 0)

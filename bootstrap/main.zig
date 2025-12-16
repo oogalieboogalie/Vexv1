@@ -200,6 +200,9 @@ const Token = struct {
         keyword_and,
         keyword_or,
         keyword_accel,
+        keyword_true,
+        keyword_false,
+        keyword_null,
         l_paren,
         r_paren,
         l_brace,
@@ -209,6 +212,7 @@ const Token = struct {
         equal_equal,
         bang_equal,
         plus,
+        plus_equal,
         minus,
         star,
         slash,
@@ -573,6 +577,9 @@ fn evalPrimary(env: *Env) Value {
         result = switch (token.kind) {
             .integer => makeInt(std.fmt.parseInt(i64, token.text, 10) catch @panic("bad integer")),
             .string => .{ .str = token.text[1 .. token.text.len - 1] },
+            .keyword_true => makeInt(1),
+            .keyword_false => makeInt(0),
+            .keyword_null => makeInt(0),
             .identifier => env.get(token.text) orelse makeInt(0),
             .l_paren => blk: {
                 const v = evalExpr(env);
@@ -969,6 +976,29 @@ fn evalStmt(env: *Env) ?Value {
             const val = evalExpr(env);
             return val;
         },
+        .identifier => {
+            if (pos + 1 < tokens.len) {
+                const next_kind = tokens[pos + 1].kind;
+                if (next_kind == .equal or next_kind == .plus_equal) {
+                    const name_tok = advance();
+                    const op_kind = advance().kind;
+                    const rhs = evalExpr(env);
+
+                    var new_val = rhs;
+                    if (op_kind == .plus_equal) {
+                        const lhs = expectInt(env.get(name_tok.text) orelse makeInt(0));
+                        const add = expectInt(rhs);
+                        new_val = makeInt(lhs + add);
+                    }
+
+                    env.set(name_tok.text, new_val);
+                    return null;
+                }
+            }
+
+            // Expression statement: evaluate and ignore the result.
+            _ = evalExpr(env);
+        },
         .eof => {},
         else => {
             // Expression statement: evaluate and ignore the result.
@@ -1154,8 +1184,13 @@ pub fn main() !void {
                 continue;
             },
             '+' => {
-                try list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line });
-                i += 1;
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .plus_equal, .text = source[i..i+2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line });
+                    i += 1;
+                }
                 continue;
             },
             '-' => {
@@ -1243,6 +1278,9 @@ pub fn main() !void {
                 else if (std.mem.eql(u8, word, "and")) .keyword_and
                 else if (std.mem.eql(u8, word, "or")) .keyword_or
                 else if (std.mem.eql(u8, word, "accel")) .keyword_accel
+                else if (std.mem.eql(u8, word, "true")) .keyword_true
+                else if (std.mem.eql(u8, word, "false")) .keyword_false
+                else if (std.mem.eql(u8, word, "null")) .keyword_null
                 else .identifier;
             try list.append(.{
                 .kind = kind,
