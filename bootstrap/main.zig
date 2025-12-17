@@ -683,10 +683,56 @@ const CompilerCoreVbcStatus = enum {
     fresh,
 };
 
+fn compilerCoreSourceMaxMtime() !i128 {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var imported = std.StringHashMap(void).init(arena.allocator());
+    var max_mtime: i128 = 0;
+    try updateMaxMtimeForUseDeps(arena.allocator(), CompilerCoreVexPath, &imported, &max_mtime);
+    return max_mtime;
+}
+
+fn updateMaxMtimeForUseDeps(arena_alloc: std.mem.Allocator, current_path: []const u8, imported: *std.StringHashMap(void), max_mtime: *i128) !void {
+    const real_path = try std.fs.cwd().realpathAlloc(arena_alloc, current_path);
+    if (imported.contains(real_path)) return;
+    try imported.put(real_path, {});
+
+    const stat = try std.fs.cwd().statFile(real_path);
+    if (stat.mtime > max_mtime.*) max_mtime.* = stat.mtime;
+
+    const source = try std.fs.cwd().readFileAlloc(arena_alloc, real_path, 16 * 1024 * 1024);
+    var list = try tokenizeSource(source);
+    defer list.deinit();
+
+    var brace_depth: usize = 0;
+    var i: usize = 0;
+    while (i < list.items.len) : (i += 1) {
+        const t = list.items[i];
+        switch (t.kind) {
+            .l_brace => brace_depth += 1,
+            .r_brace => {
+                if (brace_depth > 0) brace_depth -= 1;
+            },
+            .keyword_use => {
+                if (brace_depth != 0) continue;
+                if (i + 1 >= list.items.len) return error.InvalidUse;
+                const path_tok = list.items[i + 1];
+                if (path_tok.kind != .string) return error.InvalidUse;
+                const spec = stringLiteralValue(path_tok);
+                const full_path = resolveUsePath(arena_alloc, real_path, spec);
+                try updateMaxMtimeForUseDeps(arena_alloc, full_path, imported, max_mtime);
+                i += 1;
+            },
+            else => {},
+        }
+    }
+}
+
 fn compilerCoreVbcStatus() CompilerCoreVbcStatus {
     const vbc_stat = std.fs.cwd().statFile(CompilerCoreVbcPath) catch return .missing;
-    const vex_stat = std.fs.cwd().statFile(CompilerCoreVexPath) catch return .missing;
-    if (vbc_stat.mtime < vex_stat.mtime) return .stale;
+    const vex_mtime = compilerCoreSourceMaxMtime() catch return .stale;
+    if (vbc_stat.mtime < vex_mtime) return .stale;
     return .fresh;
 }
 
@@ -1409,11 +1455,11 @@ fn stringLiteralValue(tok: Token) []const u8 {
     return tok.text[1 .. tok.text.len - 1];
 }
 
-fn resolveUsePath(importer_path: []const u8, spec: []const u8) []u8 {
-    if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec) catch @panic("oom");
+fn resolveUsePath(alloc: std.mem.Allocator, importer_path: []const u8, spec: []const u8) []u8 {
+    if (std.fs.path.isAbsolute(spec)) return alloc.dupe(u8, spec) catch @panic("oom");
     const dir = std.fs.path.dirname(importer_path) orelse "";
-    if (dir.len == 0) return allocator.dupe(u8, spec) catch @panic("oom");
-    return std.fs.path.join(allocator, &.{ dir, spec }) catch @panic("oom");
+    if (dir.len == 0) return alloc.dupe(u8, spec) catch @panic("oom");
+    return std.fs.path.join(alloc, &.{ dir, spec }) catch @panic("oom");
 }
 
 fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.StringHashMap(void), allow_exec: bool) void {
@@ -1425,7 +1471,7 @@ fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.Strin
                 const path_tok = advance();
                 if (path_tok.kind != .string) @panic("use: expected string");
                 const spec = stringLiteralValue(path_tok);
-                const full_path = resolveUsePath(current_path, spec);
+                const full_path = resolveUsePath(allocator, current_path, spec);
                 if (imported.contains(full_path)) {
                     allocator.free(full_path);
                     continue;
@@ -2318,7 +2364,7 @@ pub fn main() !void {
     if (host_args.len <= argi) {
         // Default demo program.
         if (verbose) {
-            print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+            print("\n[vex] bootstrap interpreter\n\n", .{});
         }
 
         const file_buf = try allocator.dupe(u8, file_path);
@@ -2361,7 +2407,7 @@ pub fn main() !void {
             }
 
             if (verbose) {
-                print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+                print("\n[vex] bootstrap interpreter\n\n", .{});
             }
 
             const bc_path = host_args[argi + 1];
@@ -2484,7 +2530,7 @@ pub fn main() !void {
         }
 
         if (verbose) {
-            print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+            print("\n[vex] bootstrap interpreter\n\n", .{});
         }
     }
 
@@ -2512,7 +2558,6 @@ pub fn main() !void {
     }
 
     if (verbose) {
-        print("\n\nVEX JUST RAN YOUR CODE - NO LLVM - NO EXCUSES\n", .{});
-        print("THE FINAL LANGUAGE IS ALIVE - RIGHT NOW\n", .{});
+        print("\n[vex] done\n", .{});
     }
 }

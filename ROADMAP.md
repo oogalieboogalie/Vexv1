@@ -14,10 +14,11 @@ This is where we left off and where to go next.
   - Supports dot: `.name` yields `"name"` and `obj.field` lowers to `env_find(obj, "field")`.
   - Has builtins for env, strings, lists, filesystem IO, and argv access.
   - Can run `.vbc` bytecode files via `vex runbc <file.vbc> [args...]`.
-  - If `compiler_core.vbc` exists, `vex lex/parse/eval/bc/...` will run the compiler via stage-2 bytecode automatically.
+  - If `compiler_core.vbc` exists and is fresh (newer than `src/compiler_core.vex` and its `use` deps), `vex lex/parse/eval/bc/...` will run the compiler via stage-2 bytecode automatically.
 
 - Core self-hosting compiler (`src/compiler_core.vex`):
-  - `tokenize(src)` implemented in Vex.
+  - Lexer/tokenizer implemented in Vex (`src/core/lex.vex`).
+  - Dogfoods `use` internally: `src/compiler_core.vex` is split into small modules under `src/core/`.
   - Recursive-descent parser that builds a list-based AST.
   - Parses dot syntax: `.name` and `obj.field` (lowered to `env_find`).
   - Supports top-level `use "./file.vex"` includes (multi-file programs; functions are merged).
