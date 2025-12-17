@@ -652,6 +652,36 @@ fn bcLoadFromBytes(bytes: []const u8) Value {
     return bc_funcs;
 }
 
+const CompilerCoreVbcPath = "compiler_core.vbc";
+const CompilerCoreVexPath = "src/compiler_core.vex";
+
+const CompilerCoreVbcStatus = enum {
+    missing,
+    stale,
+    fresh,
+};
+
+fn compilerCoreVbcStatus() CompilerCoreVbcStatus {
+    const vbc_stat = std.fs.cwd().statFile(CompilerCoreVbcPath) catch return .missing;
+    const vex_stat = std.fs.cwd().statFile(CompilerCoreVexPath) catch return .missing;
+    if (vbc_stat.mtime < vex_stat.mtime) return .stale;
+    return .fresh;
+}
+
+fn runCompilerCoreVbc(host_args: [][]u8, argi: usize) bool {
+    const bc_bytes = std.fs.cwd().readFileAlloc(allocator, CompilerCoreVbcPath, 64 * 1024 * 1024) catch return false;
+    defer allocator.free(bc_bytes);
+
+    const bc_funcs = bcLoadFromBytes(bc_bytes);
+
+    const prog_args = builtinListCreate();
+    builtinListPush(prog_args, .{ .str = CompilerCoreVbcPath });
+    for (host_args[argi..]) |a| builtinListPush(prog_args, .{ .str = a });
+
+    _ = bcRunProgram(bc_funcs, prog_args);
+    return true;
+}
+
 fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller_defs: Value, bc_funcs: Value, prog_args: Value) Value {
     // Builtins
     if (std.mem.eql(u8, name, "env_create")) {
@@ -2054,6 +2084,15 @@ pub fn main() !void {
                 return;
             }
 
+            const vbc_status = compilerCoreVbcStatus();
+            if (vbc_status == .stale and verbose) {
+                print("[stage2] {s} is stale; rebuild with `vex bcsave {s} {s}`\n", .{ CompilerCoreVbcPath, CompilerCoreVexPath, CompilerCoreVbcPath });
+            }
+            if (vbc_status == .fresh) {
+                if (verbose) print("[stage2] using {s}\n", .{CompilerCoreVbcPath});
+                if (runCompilerCoreVbc(host_args, argi)) return;
+            }
+
             const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
             const tail = host_args[argi..];
             const args_buf = try allocator.alloc([]u8, tail.len + 1);
@@ -2066,6 +2105,15 @@ pub fn main() !void {
             if (host_args.len <= argi + 1) {
                 print("error: missing file\n", .{});
                 return;
+            }
+
+            const vbc_status = compilerCoreVbcStatus();
+            if (vbc_status == .stale and verbose) {
+                print("[stage2] {s} is stale; rebuild with `vex bcsave {s} {s}`\n", .{ CompilerCoreVbcPath, CompilerCoreVexPath, CompilerCoreVbcPath });
+            }
+            if (vbc_status == .fresh) {
+                if (verbose) print("[stage2] using {s}\n", .{CompilerCoreVbcPath});
+                if (runCompilerCoreVbc(host_args, argi)) return;
             }
 
             const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
@@ -2082,6 +2130,15 @@ pub fn main() !void {
                 return;
             }
 
+            const vbc_status = compilerCoreVbcStatus();
+            if (vbc_status == .stale and verbose) {
+                print("[stage2] {s} is stale; rebuild with `vex bcsave {s} {s}`\n", .{ CompilerCoreVbcPath, CompilerCoreVexPath, CompilerCoreVbcPath });
+            }
+            if (vbc_status == .fresh) {
+                if (verbose) print("[stage2] using {s}\n", .{CompilerCoreVbcPath});
+                if (runCompilerCoreVbc(host_args, argi)) return;
+            }
+
             const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");
             const tail = host_args[argi..];
             const args_buf = try allocator.alloc([]u8, tail.len + 1);
@@ -2094,6 +2151,15 @@ pub fn main() !void {
             if (host_args.len <= argi + 1) {
                 print("error: missing file\n", .{});
                 return;
+            }
+
+            const vbc_status = compilerCoreVbcStatus();
+            if (vbc_status == .stale and verbose) {
+                print("[stage2] {s} is stale; rebuild with `vex bcsave {s} {s}`\n", .{ CompilerCoreVbcPath, CompilerCoreVexPath, CompilerCoreVbcPath });
+            }
+            if (vbc_status == .fresh) {
+                if (verbose) print("[stage2] using {s}\n", .{CompilerCoreVbcPath});
+                if (runCompilerCoreVbc(host_args, argi)) return;
             }
 
             const compiler_script = try allocator.dupe(u8, "src/compiler_core.vex");

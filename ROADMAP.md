@@ -13,6 +13,7 @@ This is where we left off and where to go next.
   - Supports dot: `.name` yields `"name"` and `obj.field` lowers to `env_find(obj, "field")`.
   - Has builtins for env, strings, lists, filesystem IO, and argv access.
   - Can run `.vbc` bytecode files via `vex runbc <file.vbc> [args...]`.
+  - If `compiler_core.vbc` exists, `vex lex/parse/eval/bc/...` will run the compiler via stage-2 bytecode automatically.
 
 - Core self-hosting compiler (`src/compiler_core.vex`):
   - `tokenize(src)` implemented in Vex.
@@ -82,7 +83,8 @@ This is where we left off and where to go next.
    - (Done for Core Vex) `compiler_core.vex` lowers AST -> bytecode.
    - (Done) Zig runtime can execute that bytecode (`bc_run`).
    - (Done) Serialize bytecode to disk (`vex bcsave`) + run it without Vex parsing (`vex runbc`).
-   - Next: bootstrap `src/compiler_core.vex` as a `.vbc` and use that to rebuild itself (stage-2 loop).
+   - (Done) Stage-2 loop: `compiler_core.vbc` can rebuild itself.
+   - Next: start pushing `src/compiler.vex` (the “real” compiler) through this pipeline.
 
 8. GPU / @accel story
    - Decide on the first real `@accel` target (CUDA via LLVM, or a simpler CPU vector path).
