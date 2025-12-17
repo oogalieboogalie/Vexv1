@@ -1052,6 +1052,7 @@ const Token = struct {
         keyword_in,
         keyword_break,
         keyword_continue,
+        keyword_use,
         l_paren,
         r_paren,
         l_brace,
@@ -1091,6 +1092,7 @@ fn tokenKindLabel(k: Token.Kind) []const u8 {
     return switch (k) {
         .keyword_let => "Let",
         .keyword_print => "Print",
+        .keyword_use => "Use",
         .identifier => "Ident",
         .integer => "Int",
         .plus => "Plus",
@@ -1195,6 +1197,281 @@ fn isDigit(c: u8) bool {
 
 fn isAlpha(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
+}
+
+fn tokenizeSource(source: []const u8) !std.ArrayList(Token) {
+    var list = std.ArrayList(Token).init(allocator);
+
+    var i: usize = 0;
+    var line: usize = 1;
+    while (i < source.len) {
+        const c = source[i];
+
+        if (c == ' ' or c == '\t' or c == '\r') {
+            i += 1;
+            continue;
+        }
+        if (c == '\n') {
+            line += 1;
+            i += 1;
+            continue;
+        }
+
+        // Line comments: // ...
+        if (c == '/' and i + 1 < source.len and source[i + 1] == '/') {
+            i += 2;
+            while (i < source.len and source[i] != '\n') : (i += 1) {}
+            continue;
+        }
+
+        if (c == '"') {
+            const start = i;
+            i += 1;
+            while (i < source.len and source[i] != '"') : (i += 1) {}
+            if (i >= source.len) @panic("unterminated string");
+            i += 1;
+            try list.append(.{
+                .kind = .string,
+                .text = source[start..i],
+                .line = line,
+            });
+            continue;
+        }
+
+        switch (c) {
+            '(' => {
+                try list.append(.{ .kind = .l_paren, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            ')' => {
+                try list.append(.{ .kind = .r_paren, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '.' => {
+                if (i + 1 < source.len and source[i + 1] == '.') {
+                    try list.append(.{ .kind = .dot_dot, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .dot, .text = source[i..i + 1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '{' => {
+                try list.append(.{ .kind = .l_brace, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '}' => {
+                try list.append(.{ .kind = .r_brace, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '[' => {
+                try list.append(.{ .kind = .l_bracket, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            ']' => {
+                try list.append(.{ .kind = .r_bracket, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '+' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .plus_equal, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .plus, .text = source[i..i + 1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '-' => {
+                try list.append(.{ .kind = .minus, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '*' => {
+                try list.append(.{ .kind = .star, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '/' => {
+                try list.append(.{ .kind = .slash, .text = source[i..i + 1], .line = line });
+                i += 1;
+                continue;
+            },
+            '<' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .less_equal, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .less, .text = source[i..i + 1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '>' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .greater_equal, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .greater, .text = source[i..i + 1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '=' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .equal_equal, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    try list.append(.{ .kind = .equal, .text = source[i..i + 1], .line = line });
+                    i += 1;
+                }
+                continue;
+            },
+            '!' => {
+                if (i + 1 < source.len and source[i + 1] == '=') {
+                    try list.append(.{ .kind = .bang_equal, .text = source[i..i + 2], .line = line });
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                continue;
+            },
+            else => {},
+        }
+
+        if (isDigit(c)) {
+            const start = i;
+            i += 1;
+            while (i < source.len and isDigit(source[i])) : (i += 1) {}
+            try list.append(.{
+                .kind = .integer,
+                .text = source[start..i],
+                .line = line,
+            });
+            continue;
+        }
+
+        if (isAlpha(c)) {
+            const start = i;
+            i += 1;
+            while (i < source.len and (isAlpha(source[i]) or isDigit(source[i]))) : (i += 1) {}
+            const word = source[start..i];
+            const kind: Token.Kind =
+                if (std.mem.eql(u8, word, "let")) .keyword_let
+                else if (std.mem.eql(u8, word, "print")) .keyword_print
+                else if (std.mem.eql(u8, word, "fn")) .keyword_fn
+                else if (std.mem.eql(u8, word, "return")) .keyword_return
+                else if (std.mem.eql(u8, word, "if")) .keyword_if
+                else if (std.mem.eql(u8, word, "else")) .keyword_else
+                else if (std.mem.eql(u8, word, "while")) .keyword_while
+                else if (std.mem.eql(u8, word, "and")) .keyword_and
+                else if (std.mem.eql(u8, word, "or")) .keyword_or
+                else if (std.mem.eql(u8, word, "accel")) .keyword_accel
+                else if (std.mem.eql(u8, word, "true")) .keyword_true
+                else if (std.mem.eql(u8, word, "false")) .keyword_false
+                else if (std.mem.eql(u8, word, "null")) .keyword_null
+                else if (std.mem.eql(u8, word, "for")) .keyword_for
+                else if (std.mem.eql(u8, word, "in")) .keyword_in
+                else if (std.mem.eql(u8, word, "break")) .keyword_break
+                else if (std.mem.eql(u8, word, "continue")) .keyword_continue
+                else if (std.mem.eql(u8, word, "use")) .keyword_use
+                else .identifier;
+            try list.append(.{
+                .kind = kind,
+                .text = word,
+                .line = line,
+            });
+            continue;
+        }
+
+        i += 1;
+    }
+
+    try list.append(.{
+        .kind = .eof,
+        .text = "",
+        .line = line,
+    });
+
+    return list;
+}
+
+fn stringLiteralValue(tok: Token) []const u8 {
+    if (tok.kind != .string) return "";
+    if (tok.text.len < 2) return "";
+    return tok.text[1 .. tok.text.len - 1];
+}
+
+fn resolveUsePath(importer_path: []const u8, spec: []const u8) []u8 {
+    if (std.fs.path.isAbsolute(spec)) return allocator.dupe(u8, spec) catch @panic("oom");
+    const dir = std.fs.path.dirname(importer_path) orelse "";
+    if (dir.len == 0) return allocator.dupe(u8, spec) catch @panic("oom");
+    return std.fs.path.join(allocator, &.{ dir, spec }) catch @panic("oom");
+}
+
+fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.StringHashMap(void), allow_exec: bool) void {
+    while (peek().kind != .eof) {
+        const t = peek();
+        switch (t.kind) {
+            .keyword_use => {
+                _ = advance(); // 'use'
+                const path_tok = advance();
+                if (path_tok.kind != .string) @panic("use: expected string");
+                const spec = stringLiteralValue(path_tok);
+                const full_path = resolveUsePath(current_path, spec);
+                if (imported.contains(full_path)) {
+                    allocator.free(full_path);
+                    continue;
+                }
+                imported.put(full_path, {}) catch @panic("oom");
+
+                const source = std.fs.cwd().readFileAlloc(allocator, full_path, 16 * 1024 * 1024) catch {
+                    print("error: failed to read {s}\n", .{full_path});
+                    continue;
+                };
+                // Don't free `source`: function bodies keep slices into it.
+
+                var list = tokenizeSource(source) catch @panic("tokenize failed");
+                defer list.deinit();
+
+                const saved_tokens = tokens;
+                const saved_pos = pos;
+
+                tokens = list.items;
+                pos = 0;
+                scanTopLevel(full_path, global_env, imported, false);
+
+                tokens = saved_tokens;
+                pos = saved_pos;
+            },
+            .keyword_accel => parseFunction(true),
+            .keyword_fn => parseFunction(false),
+            .eof => {},
+            else => {
+                if (allow_exec) {
+                    const ctrl = evalStmt(global_env);
+                    switch (ctrl) {
+                        .none => {},
+                        .ret => @panic("return outside function"),
+                        .brk => @panic("break outside loop"),
+                        .cont => @panic("continue outside loop"),
+                    }
+                    if (verbose and peek().kind != .eof) {
+                        print("\n", .{});
+                    }
+                } else {
+                    _ = advance();
+                }
+            },
+        }
+    }
 }
 
 fn parseFunction(is_accel: bool) void {
@@ -2214,205 +2491,8 @@ pub fn main() !void {
     const source = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
     defer allocator.free(source);
 
-    var list = std.ArrayList(Token).init(allocator);
+    var list = try tokenizeSource(source);
     defer list.deinit();
-
-    var i: usize = 0;
-    var line: usize = 1;
-    while (i < source.len) {
-        const c = source[i];
-
-        if (c == ' ' or c == '\t' or c == '\r') {
-            i += 1;
-            continue;
-        }
-        if (c == '\n') {
-            line += 1;
-            i += 1;
-            continue;
-        }
-
-        // Line comments: // ...
-        if (c == '/' and i + 1 < source.len and source[i + 1] == '/') {
-            i += 2;
-            while (i < source.len and source[i] != '\n') : (i += 1) {}
-            continue;
-        }
-
-        if (c == '"') {
-            const start = i;
-            i += 1;
-            while (i < source.len and source[i] != '"') : (i += 1) {}
-            if (i >= source.len) @panic("unterminated string");
-            i += 1;
-            try list.append(.{
-                .kind = .string,
-                .text = source[start..i],
-                .line = line,
-            });
-            continue;
-        }
-
-        switch (c) {
-            '(' => {
-                try list.append(.{ .kind = .l_paren, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            ')' => {
-                try list.append(.{ .kind = .r_paren, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '.' => {
-                if (i + 1 < source.len and source[i + 1] == '.') {
-                    try list.append(.{ .kind = .dot_dot, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    try list.append(.{ .kind = .dot, .text = source[i..i+1], .line = line });
-                    i += 1;
-                }
-                continue;
-            },
-            '{' => {
-                try list.append(.{ .kind = .l_brace, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '}' => {
-                try list.append(.{ .kind = .r_brace, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '[' => {
-                try list.append(.{ .kind = .l_bracket, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            ']' => {
-                try list.append(.{ .kind = .r_bracket, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '+' => {
-                if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .plus_equal, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    try list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line });
-                    i += 1;
-                }
-                continue;
-            },
-            '-' => {
-                try list.append(.{ .kind = .minus, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '*' => {
-                try list.append(.{ .kind = .star, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '/' => {
-                try list.append(.{ .kind = .slash, .text = source[i..i+1], .line = line });
-                i += 1;
-                continue;
-            },
-            '<' => {
-                if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .less_equal, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    try list.append(.{ .kind = .less, .text = source[i..i+1], .line = line });
-                    i += 1;
-                }
-                continue;
-            },
-            '>' => {
-                if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .greater_equal, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    try list.append(.{ .kind = .greater, .text = source[i..i+1], .line = line });
-                    i += 1;
-                }
-                continue;
-            },
-            '=' => {
-                if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .equal_equal, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    try list.append(.{ .kind = .equal, .text = source[i..i+1], .line = line });
-                    i += 1;
-                }
-                continue;
-            },
-            '!' => {
-                if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .bang_equal, .text = source[i..i+2], .line = line });
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                continue;
-            },
-            else => {},
-        }
-
-        if (isDigit(c)) {
-            const start = i;
-            i += 1;
-            while (i < source.len and isDigit(source[i])) : (i += 1) {}
-            try list.append(.{
-                .kind = .integer,
-                .text = source[start..i],
-                .line = line,
-            });
-            continue;
-        }
-
-        if (isAlpha(c)) {
-            const start = i;
-            i += 1;
-            while (i < source.len and (isAlpha(source[i]) or isDigit(source[i]))) : (i += 1) {}
-            const word = source[start..i];
-            const kind: Token.Kind =
-                if (std.mem.eql(u8, word, "let")) .keyword_let
-                else if (std.mem.eql(u8, word, "print")) .keyword_print
-                else if (std.mem.eql(u8, word, "fn")) .keyword_fn
-                else if (std.mem.eql(u8, word, "return")) .keyword_return
-                else if (std.mem.eql(u8, word, "if")) .keyword_if
-                else if (std.mem.eql(u8, word, "else")) .keyword_else
-                else if (std.mem.eql(u8, word, "while")) .keyword_while
-                else if (std.mem.eql(u8, word, "and")) .keyword_and
-                else if (std.mem.eql(u8, word, "or")) .keyword_or
-                else if (std.mem.eql(u8, word, "accel")) .keyword_accel
-                else if (std.mem.eql(u8, word, "true")) .keyword_true
-                else if (std.mem.eql(u8, word, "false")) .keyword_false
-                else if (std.mem.eql(u8, word, "null")) .keyword_null
-                else if (std.mem.eql(u8, word, "for")) .keyword_for
-                else if (std.mem.eql(u8, word, "in")) .keyword_in
-                else if (std.mem.eql(u8, word, "break")) .keyword_break
-                else if (std.mem.eql(u8, word, "continue")) .keyword_continue
-                else .identifier;
-            try list.append(.{
-                .kind = kind,
-                .text = word,
-                .line = line,
-            });
-            continue;
-        }
-
-        i += 1;
-    }
-
-    try list.append(.{
-        .kind = .eof,
-        .text = "",
-        .line = line,
-    });
 
     tokens = list.items;
     pos = 0;
@@ -2421,26 +2501,9 @@ pub fn main() !void {
 
     const global_env = try Env.create(null);
 
-    while (peek().kind != .eof) {
-        const t = peek();
-        switch (t.kind) {
-            .keyword_accel => parseFunction(true),
-            .keyword_fn => parseFunction(false),
-            .eof => {},
-            else => {
-                const ctrl = evalStmt(global_env);
-                switch (ctrl) {
-                    .none => {},
-                    .ret => @panic("return outside function"),
-                    .brk => @panic("break outside loop"),
-                    .cont => @panic("continue outside loop"),
-                }
-                if (verbose and peek().kind != .eof) {
-                    print("\n", .{});
-                }
-            },
-        }
-    }
+    var imported = std.StringHashMap(void).init(allocator);
+    _ = imported.put(allocator.dupe(u8, file_path) catch @panic("oom"), {}) catch @panic("oom");
+    scanTopLevel(file_path, global_env, &imported, true);
 
     if (functions.get("main")) |main_func| {
         _ = main_func; // value unused, we just check existence

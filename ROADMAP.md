@@ -7,6 +7,7 @@ This is where we left off and where to go next.
 - Zig bootstrap interpreter (`bootstrap/main.zig`):
   - Requires a system Zig `0.13.x` install (not vendored in this repo).
   - Executes Core Vex: `let`, assignment (`=` / `+=`), index assignment (`xs[i] = v` / `xs[i] += v`), `print`, `fn` (any number of parameters), `return`, `if`/`else`, `while`, `for i in a..b { ... }`, `break`/`continue`, `xs[i]`, `true`/`false`/`null`.
+  - Supports top-level `use "./file.vex"` includes (multi-file programs; functions are merged).
   - Operators: `+ - * /`, `< <= > >=`, `== !=` (ints + strings), `and` / `or`.
   - Supports `@accel`-tagged functions (registered with a CPU stub today).
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
