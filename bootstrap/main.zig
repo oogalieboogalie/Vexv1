@@ -167,6 +167,448 @@ fn builtinWriteFile(path: []const u8, data: []const u8) void {
     file.writeAll(data) catch @panic("write_file: write failed");
 }
 
+// --- Bytecode VM (Zig runtime) ---
+// This executes the bytecode emitted by `src/compiler_core.vex`.
+//
+// Instruction format is a Vex list: [op, a?, b?]
+// Ops:
+//   1  PUSH_INT value
+//   2  PUSH_STR value
+//   3  LOAD name
+//   4  STORE name
+//   10 BIN op_kind
+//   11 CALL name argc
+//   12 POP
+//   13 JMP target_ip
+//   14 JMP_Z target_ip
+//   15 RET
+//   16 PRINT
+//   17 PRINT_STR raw
+//   18 DUP2
+//   19 TMP_SET idx
+//   20 TMP_GET idx
+//   99 TRAP message
+
+fn bcListPtr(handle: Value) ?*VexList {
+    if (isZeroInt(handle)) return null;
+    const addr = @as(usize, @intCast(expectInt(handle)));
+    return @as(*VexList, @ptrFromInt(addr));
+}
+
+fn bcListLen(handle: Value) usize {
+    if (bcListPtr(handle)) |list_ptr| {
+        return list_ptr.items.items.len;
+    }
+    return 0;
+}
+
+fn bcListGet(handle: Value, idx: usize) Value {
+    if (bcListPtr(handle)) |list_ptr| {
+        if (idx < list_ptr.items.items.len) {
+            return list_ptr.items.items[idx];
+        }
+    }
+    return makeInt(0);
+}
+
+fn bcStackPop(stack: *std.ArrayList(Value)) Value {
+    return stack.popOrNull() orelse makeInt(0);
+}
+
+fn bcTmpSet(tmps: *std.ArrayList(Value), idx: usize, v: Value) void {
+    if (idx < tmps.items.len) {
+        tmps.items[idx] = v;
+        return;
+    }
+    while (tmps.items.len < idx) {
+        tmps.append(makeInt(0)) catch @panic("oom");
+    }
+    if (idx == tmps.items.len) {
+        tmps.append(v) catch @panic("oom");
+    }
+}
+
+fn bcTmpGet(tmps: []const Value, idx: usize) Value {
+    if (idx < tmps.len) return tmps[idx];
+    return makeInt(0);
+}
+
+fn bcEnvFindOrZero(env_handle: Value, key: []const u8) Value {
+    if (builtinEnvFind(env_handle, key)) |v| return v;
+    return makeInt(0);
+}
+
+fn bcPrintValue(v: Value) void {
+    switch (v) {
+        .int => |n| print("{d}", .{n}),
+        .str => |s| print("{s}", .{s}),
+    }
+}
+
+fn bcParseIntDigits(bytes: []const u8) i64 {
+    var v: i64 = 0;
+    for (bytes) |c| {
+        if (!isDigit(c)) break;
+        v = v * 10 + @as(i64, @intCast(c - '0'));
+    }
+    return v;
+}
+
+fn bcRenderString(raw: []const u8, vals_env: Value, defs_env: Value, bc_funcs: Value, prog_args: Value) void {
+    var i: usize = 0;
+    while (i < raw.len) {
+        const c = raw[i];
+        if (c == '{') {
+            var j: usize = i + 1;
+            while (j < raw.len and raw[j] != '}') : (j += 1) {}
+            if (j >= raw.len) {
+                print("{c}", .{'{'});
+                i += 1;
+                continue;
+            }
+
+            const expr = raw[i + 1 .. j];
+
+            // Trim spaces
+            var k: usize = 0;
+            while (k < expr.len and (expr[k] == ' ' or expr[k] == '\t')) : (k += 1) {}
+            const start_name = k;
+            while (k < expr.len and (isAlpha(expr[k]) or isDigit(expr[k]))) : (k += 1) {}
+            const name = expr[start_name..k];
+            while (k < expr.len and (expr[k] == ' ' or expr[k] == '\t')) : (k += 1) {}
+
+            if (k < expr.len and expr[k] == '(') {
+                // Simple function call in interpolation: {name(16)} or {name(x)}
+                k += 1;
+                while (k < expr.len and (expr[k] == ' ' or expr[k] == '\t')) : (k += 1) {}
+
+                var arg_val: Value = makeInt(0);
+                if (k < expr.len and isDigit(expr[k])) {
+                    const arg_start = k;
+                    while (k < expr.len and isDigit(expr[k])) : (k += 1) {}
+                    arg_val = makeInt(bcParseIntDigits(expr[arg_start..k]));
+                } else {
+                    const arg_start = k;
+                    while (k < expr.len and (isAlpha(expr[k]) or isDigit(expr[k]))) : (k += 1) {}
+                    const arg_name = expr[arg_start..k];
+                    arg_val = bcEnvFindOrZero(vals_env, arg_name);
+                }
+
+                const tmp_args = [_]Value{arg_val};
+                const v = bcCallValue(name, tmp_args[0..], vals_env, defs_env, bc_funcs, prog_args);
+                bcPrintValue(v);
+            } else {
+                // variable: {x}
+                const def = bcEnvFindOrZero(defs_env, name);
+                if (!isZeroInt(def)) {
+                    bcPrintValue(bcEnvFindOrZero(vals_env, name));
+                } else {
+                    print("{c}{s}{c}", .{'{', name, '}'});
+                }
+            }
+
+            i = j + 1;
+            continue;
+        }
+
+        // Basic escape handling: \n
+        if (c == '\\' and i + 1 < raw.len and raw[i + 1] == 'n') {
+            print("\n", .{});
+            i += 2;
+            continue;
+        }
+
+        print("{c}", .{c});
+        i += 1;
+    }
+}
+
+fn bcRunProgram(bc_funcs: Value, prog_args: Value) Value {
+    if (builtinEnvFind(bc_funcs, "main")) |main_rec| {
+        const root_vals = builtinEnvCreate(null);
+        const root_defs = builtinEnvCreate(null);
+        const tmp_args = [_]Value{};
+        return bcExecFunc(main_rec, tmp_args[0..], root_vals, root_defs, bc_funcs, prog_args);
+    }
+
+    print("[no main]\n", .{});
+    return makeInt(0);
+}
+
+fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller_defs: Value, bc_funcs: Value, prog_args: Value) Value {
+    // Builtins
+    if (std.mem.eql(u8, name, "env_create")) {
+        const parent_handle: Value = if (args.len > 0) args[0] else makeInt(0);
+        return builtinEnvCreate(parent_handle);
+    } else if (std.mem.eql(u8, name, "env_set")) {
+        const env_handle = if (args.len > 0) args[0] else makeInt(0);
+        const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        const val = if (args.len > 2) args[2] else makeInt(0);
+        builtinEnvSet(env_handle, key, val);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "env_find")) {
+        const env_handle = if (args.len > 0) args[0] else makeInt(0);
+        const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        if (builtinEnvFind(env_handle, key)) |v| return v;
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "str_len")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        return makeInt(@as(i64, @intCast(s.len)));
+    } else if (std.mem.eql(u8, name, "str_char")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const idx = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        if (idx < 0 or @as(usize, @intCast(idx)) >= s.len) return makeInt(0);
+        return makeInt(@as(i64, s[@as(usize, @intCast(idx))]));
+    } else if (std.mem.eql(u8, name, "str_slice")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        var start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        var end = expectInt(if (args.len > 2) args[2] else makeInt(0));
+        if (start < 0) start = 0;
+        if (end < start) end = start;
+        const len = @as(i64, @intCast(s.len));
+        if (start > len) start = len;
+        if (end > len) end = len;
+        const ustart: usize = @intCast(start);
+        const uend: usize = @intCast(end);
+        return .{ .str = s[ustart..uend] };
+    } else if (std.mem.eql(u8, name, "print_bytes")) {
+        builtinPrintBytes(expectStr(if (args.len > 0) args[0] else Value{ .str = "" }));
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "print_char")) {
+        const b: u8 = @intCast(expectInt(if (args.len > 0) args[0] else makeInt(0)));
+        builtinPrintChar(b);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "list_create")) {
+        return builtinListCreate();
+    } else if (std.mem.eql(u8, name, "list_push")) {
+        const list_handle = if (args.len > 0) args[0] else makeInt(0);
+        const v = if (args.len > 1) args[1] else makeInt(0);
+        builtinListPush(list_handle, v);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "list_len")) {
+        const list_handle = if (args.len > 0) args[0] else makeInt(0);
+        return builtinListLen(list_handle);
+    } else if (std.mem.eql(u8, name, "list_get")) {
+        const list_handle = if (args.len > 0) args[0] else makeInt(0);
+        const idx_val = if (args.len > 1) args[1] else makeInt(0);
+        return builtinListGet(list_handle, idx_val);
+    } else if (std.mem.eql(u8, name, "list_set")) {
+        const list_handle = if (args.len > 0) args[0] else makeInt(0);
+        const idx_val = if (args.len > 1) args[1] else makeInt(0);
+        const v = if (args.len > 2) args[2] else makeInt(0);
+        builtinListSet(list_handle, idx_val, v);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "read_file")) {
+        const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        return builtinReadFile(path);
+    } else if (std.mem.eql(u8, name, "write_file")) {
+        const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const data = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        builtinWriteFile(path, data);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "arg_len")) {
+        return makeInt(@intCast(bcListLen(prog_args)));
+    } else if (std.mem.eql(u8, name, "arg_get")) {
+        const idx_signed = expectInt(if (args.len > 0) args[0] else makeInt(0));
+        const n = bcListLen(prog_args);
+        if (idx_signed < 0) return .{ .str = "" };
+        const idx: usize = @intCast(idx_signed);
+        if (idx >= n) return .{ .str = "" };
+        const v = bcListGet(prog_args, idx);
+        return .{ .str = expectStr(v) };
+    } else if (std.mem.eql(u8, name, "bc_run")) {
+        const new_bc_funcs = if (args.len > 0) args[0] else makeInt(0);
+        const new_prog_args = if (args.len > 1) args[1] else makeInt(0);
+        return bcRunProgram(new_bc_funcs, new_prog_args);
+    }
+
+    // User-defined
+    if (builtinEnvFind(bc_funcs, name)) |func_rec| {
+        return bcExecFunc(func_rec, args, caller_vals, caller_defs, bc_funcs, prog_args);
+    }
+
+    print("[undefined function] {s}\n", .{name});
+    return makeInt(0);
+}
+
+fn bcExecFunc(func_rec: Value, args: []const Value, caller_vals: Value, caller_defs: Value, bc_funcs: Value, prog_args: Value) Value {
+    const vals = builtinEnvCreate(caller_vals);
+    const defs = builtinEnvCreate(caller_defs);
+
+    const params = bcListGet(func_rec, 1);
+    const nparams = bcListLen(params);
+    for (0..nparams) |idx| {
+        const p = expectStr(bcListGet(params, idx));
+        if (p.len == 0) continue;
+        const v: Value = if (idx < args.len) args[idx] else makeInt(0);
+        builtinEnvSet(vals, p, v);
+        builtinEnvSet(defs, p, makeInt(1));
+    }
+
+    const code = bcListGet(func_rec, 2);
+    const ncode = bcListLen(code);
+
+    var stack = std.ArrayList(Value).init(allocator);
+    defer stack.deinit();
+
+    var tmps = std.ArrayList(Value).init(allocator);
+    defer tmps.deinit();
+
+    var ip: usize = 0;
+    while (ip < ncode) {
+        const ins = bcListGet(code, ip);
+        const op = expectInt(bcListGet(ins, 0));
+
+        switch (op) {
+            1 => { // PUSH_INT
+                stack.append(bcListGet(ins, 1)) catch @panic("oom");
+                ip += 1;
+            },
+            2 => { // PUSH_STR
+                stack.append(bcListGet(ins, 1)) catch @panic("oom");
+                ip += 1;
+            },
+            3 => { // LOAD
+                const name = expectStr(bcListGet(ins, 1));
+                const v = bcEnvFindOrZero(vals, name);
+                stack.append(v) catch @panic("oom");
+                ip += 1;
+            },
+            4 => { // STORE
+                const name = expectStr(bcListGet(ins, 1));
+                const v = bcStackPop(&stack);
+                if (name.len != 0) {
+                    builtinEnvSet(vals, name, v);
+                    builtinEnvSet(defs, name, makeInt(1));
+                }
+                ip += 1;
+            },
+            10 => { // BIN
+                const k = expectInt(bcListGet(ins, 1));
+                const rhs = bcStackPop(&stack);
+                const lhs = bcStackPop(&stack);
+
+                var out: Value = makeInt(0);
+                if (k == 18) out = makeInt(expectInt(lhs) + expectInt(rhs));
+                if (k == 19) out = makeInt(expectInt(lhs) - expectInt(rhs));
+                if (k == 20) out = makeInt(expectInt(lhs) * expectInt(rhs));
+                if (k == 21) out = makeInt(@divTrunc(expectInt(lhs), expectInt(rhs)));
+
+                if (k == 22) out = makeInt(if (expectInt(lhs) < expectInt(rhs)) 1 else 0);
+                if (k == 23) out = makeInt(if (expectInt(lhs) <= expectInt(rhs)) 1 else 0);
+                if (k == 26) out = makeInt(if (expectInt(lhs) > expectInt(rhs)) 1 else 0);
+                if (k == 27) out = makeInt(if (expectInt(lhs) >= expectInt(rhs)) 1 else 0);
+
+                if (k == 16) {
+                    const eq = switch (lhs) {
+                        .int => |li| switch (rhs) { .int => |ri| li == ri, .str => false },
+                        .str => |ls| switch (rhs) { .str => |rs| std.mem.eql(u8, ls, rs), .int => false },
+                    };
+                    out = makeInt(if (eq) 1 else 0);
+                }
+                if (k == 17) {
+                    const eq = switch (lhs) {
+                        .int => |li| switch (rhs) { .int => |ri| li == ri, .str => false },
+                        .str => |ls| switch (rhs) { .str => |rs| std.mem.eql(u8, ls, rs), .int => false },
+                    };
+                    out = makeInt(if (!eq) 1 else 0);
+                }
+                if (k == 24) out = makeInt(if (expectInt(lhs) != 0 and expectInt(rhs) != 0) 1 else 0);
+                if (k == 25) out = makeInt(if (expectInt(lhs) != 0 or expectInt(rhs) != 0) 1 else 0);
+
+                stack.append(out) catch @panic("oom");
+                ip += 1;
+            },
+            11 => { // CALL
+                const name = expectStr(bcListGet(ins, 1));
+                const argc_signed = expectInt(bcListGet(ins, 2));
+                if (argc_signed < 0) @panic("bytecode: negative argc");
+                const argc: usize = @intCast(argc_signed);
+
+                const args_buf = allocator.alloc(Value, argc) catch @panic("oom");
+                defer allocator.free(args_buf);
+
+                var j: usize = argc;
+                while (j > 0) {
+                    j -= 1;
+                    args_buf[j] = bcStackPop(&stack);
+                }
+
+                const v = bcCallValue(name, args_buf, vals, defs, bc_funcs, prog_args);
+                stack.append(v) catch @panic("oom");
+                ip += 1;
+            },
+            12 => { // POP
+                _ = bcStackPop(&stack);
+                ip += 1;
+            },
+            13 => { // JMP
+                const target = expectInt(bcListGet(ins, 1));
+                if (target < 0) @panic("bytecode: negative jump");
+                ip = @intCast(target);
+            },
+            14 => { // JMP_Z
+                const target = expectInt(bcListGet(ins, 1));
+                const cond = bcStackPop(&stack);
+                if (expectInt(cond) == 0) {
+                    if (target < 0) @panic("bytecode: negative jump");
+                    ip = @intCast(target);
+                } else {
+                    ip += 1;
+                }
+            },
+            15 => { // RET
+                return bcStackPop(&stack);
+            },
+            16 => { // PRINT
+                bcPrintValue(bcStackPop(&stack));
+                ip += 1;
+            },
+            17 => { // PRINT_STR
+                bcRenderString(expectStr(bcListGet(ins, 1)), vals, defs, bc_funcs, prog_args);
+                ip += 1;
+            },
+            18 => { // DUP2
+                if (stack.items.len < 2) {
+                    print("dup2 underflow\n", .{});
+                    return makeInt(0);
+                }
+                const a = stack.items[stack.items.len - 2];
+                const b = stack.items[stack.items.len - 1];
+                stack.append(a) catch @panic("oom");
+                stack.append(b) catch @panic("oom");
+                ip += 1;
+            },
+            19 => { // TMP_SET
+                const idx_signed = expectInt(bcListGet(ins, 1));
+                if (idx_signed < 0) @panic("bytecode: negative tmp idx");
+                bcTmpSet(&tmps, @intCast(idx_signed), bcStackPop(&stack));
+                ip += 1;
+            },
+            20 => { // TMP_GET
+                const idx_signed = expectInt(bcListGet(ins, 1));
+                if (idx_signed < 0) @panic("bytecode: negative tmp idx");
+                stack.append(bcTmpGet(tmps.items, @intCast(idx_signed))) catch @panic("oom");
+                ip += 1;
+            },
+            99 => { // TRAP
+                bcPrintValue(bcListGet(ins, 1));
+                return makeInt(0);
+            },
+            else => {
+                print("bytecode: unknown op {d}\n", .{op});
+                return makeInt(0);
+            },
+        }
+    }
+
+    return makeInt(0);
+}
+
+fn builtinBcRun(bc_funcs: Value, prog_args: Value) Value {
+    return bcRunProgram(bc_funcs, prog_args);
+}
+
 var script_args: [][]u8 = &[_][]u8{};
 var verbose: bool = false;
 
@@ -612,6 +1054,10 @@ fn evalPrimary(env: *Env) Value {
         } else if (std.mem.eql(u8, name, "arg_get")) {
             const idx_val = if (args.len > 0) args[0] else makeInt(0);
             result = builtinArgGet(idx_val);
+        } else if (std.mem.eql(u8, name, "bc_run")) {
+            const bc_funcs = if (args.len > 0) args[0] else makeInt(0);
+            const prog_args = if (args.len > 1) args[1] else makeInt(0);
+            result = builtinBcRun(bc_funcs, prog_args);
         } else {
             // User-defined
             result = runFunction(name, args, env);
@@ -1230,6 +1676,7 @@ pub fn main() !void {
                  \\  vex [--verbose|-v] parse <file.vex> [dump]
                  \\  vex [--verbose|-v] eval <file.vex> [args...]
                  \\  vex [--verbose|-v] bc <file.vex> [args...]
+                 \\  vex [--verbose|-v] bcvex <file.vex> [args...]
                  \\  vex [--verbose|-v] bcdump <file.vex>
                  \\
                  \\Notes:
@@ -1290,7 +1737,7 @@ pub fn main() !void {
 
             file_path = compiler_script;
             script_args = args_buf;
-        } else if (std.mem.eql(u8, cmd, "bc") or std.mem.eql(u8, cmd, "bcdump")) {
+        } else if (std.mem.eql(u8, cmd, "bc") or std.mem.eql(u8, cmd, "bcvex") or std.mem.eql(u8, cmd, "bcdump")) {
             if (host_args.len <= argi + 1) {
                 print("error: missing file\n", .{});
                 return;

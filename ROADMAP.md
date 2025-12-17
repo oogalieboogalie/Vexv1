@@ -20,8 +20,9 @@ This is where we left off and where to go next.
   - Parses/evals assignment (`=` / `+=`), index assignment (`xs[i] = v` / `xs[i] += v`), `for i in a..b { ... }`, `break`/`continue`, `xs[i]`, and `true`/`false`/`null` literals.
   - Bytecode compiler + VM for Core Vex:
     - `vex bc <file.vex> [args...]` compiles to bytecode and runs it.
+    - `vex bcvex <file.vex> [args...]` compiles to bytecode and runs it via the Vex VM (debug).
     - `vex bcdump <file.vex>` dumps bytecode (debug).
-  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, `vex eval <file.vex> [args...]`, `vex bc <file.vex> [args...]`, and `vex bcdump <file.vex>`.
+  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, `vex eval <file.vex> [args...]`, `vex bc <file.vex> [args...]`, `vex bcvex <file.vex> [args...]`, and `vex bcdump <file.vex>`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
   - Defines `TokenKind` / `Token` matching the interpreter's lexer.
@@ -76,8 +77,9 @@ This is where we left off and where to go next.
 7. Code generation path
    - Design an intermediate representation (IR) for Vex:
      - Either a small bytecode for a Vex VM, or a simple SSA-style IR.
-   - (Done for Core Vex) `compiler_core.vex` lowers AST -> bytecode and runs a bytecode VM.
-   - Next: move the VM into Zig so compiled bytecode can run without interpreting Vex.
+   - (Done for Core Vex) `compiler_core.vex` lowers AST -> bytecode.
+   - (Done) Zig runtime can execute that bytecode (`bc_run`).
+   - Next: serialize bytecode to disk + add a `vex runbc` path so programs can run without interpreting `compiler_core.vex`.
 
 8. GPU / @accel story
    - Decide on the first real `@accel` target (CUDA via LLVM, or a simpler CPU vector path).

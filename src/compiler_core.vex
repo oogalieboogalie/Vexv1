@@ -2838,6 +2838,7 @@ fn main() {
     let do_parse = 0
     let do_eval = 0
     let do_bc = 0
+    let do_bcvex = 0
     let do_bcdump = 0
     let dump_tree = 0
     let path = "src/vex.vex"
@@ -2862,6 +2863,11 @@ fn main() {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
+        if str_eq(first, "bcvex") {
+            let do_bcvex = 1
+            if 2 < arg_len() { let path = arg_get(2) }
+        }
+
         if str_eq(first, "bcdump") {
             let do_bcdump = 1
             if 2 < arg_len() { let path = arg_get(2) }
@@ -2871,7 +2877,7 @@ fn main() {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
-        if do_parse == 0 and do_eval == 0 and do_bc == 0 and do_bcdump == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 and str_eq(first, "bc") == 0 and str_eq(first, "bcdump") == 0 {
+        if do_parse == 0 and do_eval == 0 and do_bc == 0 and do_bcvex == 0 and do_bcdump == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 and str_eq(first, "bc") == 0 and str_eq(first, "bcvex") == 0 and str_eq(first, "bcdump") == 0 {
             let path = first
         }
     }
@@ -2900,6 +2906,20 @@ fn main() {
     }
 
     if do_bc == 1 {
+        let prog = parse_program(toks)
+        let prog_args = list_create()
+        list_push(prog_args, path)
+        let i = 3
+        while i < arg_len() {
+            list_push(prog_args, arg_get(i))
+            let i = i + 1
+        }
+        let bc_funcs = bc_compile_program(prog)
+        bc_run(bc_funcs, prog_args)
+        return
+    }
+
+    if do_bcvex == 1 {
         let prog = parse_program(toks)
         let prog_args = list_create()
         list_push(prog_args, path)
