@@ -19,6 +19,7 @@ This is where we left off and where to go next.
   - `tokenize(src)` implemented in Vex.
   - Recursive-descent parser that builds a list-based AST.
   - Parses dot syntax: `.name` and `obj.field` (lowered to `env_find`).
+  - Supports top-level `use "./file.vex"` includes (multi-file programs; functions are merged).
   - Parses/evals assignment (`=` / `+=`), index assignment (`xs[i] = v` / `xs[i] += v`), `for i in a..b { ... }`, `break`/`continue`, `xs[i]`, and `true`/`false`/`null` literals.
   - Bytecode compiler + VM for Core Vex:
     - `vex bc <file.vex> [args...]` compiles to bytecode and runs it.

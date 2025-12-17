@@ -1,0 +1,3 @@
+fn greet(who) {
+    print("hello {who} from import_lib\n")
+}

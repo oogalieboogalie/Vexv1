@@ -26,6 +26,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Save bytecode to disk: `zig build run -- bcsave examples/hello.vex hello.vbc`
 - Run saved bytecode (no Vex parsing): `zig build run -- runbc hello.vbc`
 - Optional stage2 (faster compiler commands): `zig build run -- bcsave src/compiler_core.vex compiler_core.vbc`
+- Imports (top-level): `use "./file.vex"` (demo: `zig build run -- eval examples/import_main.vex`)
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`
@@ -41,6 +42,7 @@ See `examples/` for small programs you can modify while iterating on the languag
 ## Core Vex (today)
 
 - Statements: `let`, assignment (`=` / `+=`), `print`, `fn`, `return`, `if`/`else`, `while`, `for i in a..b { ... }`, `break`, `continue`
+- Top-level: `use "./path.vex"` includes another file (functions are merged)
 - Calls: arbitrary arity; builtins for env, strings, lists, filesystem IO, argv
 - Indexing: `xs[i]` lowers to `list_get(xs, i)`
 - Index assignment: `xs[i] = v` / `xs[i] += v` lowers to `list_set(xs, i, ...)`

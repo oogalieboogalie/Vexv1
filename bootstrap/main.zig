@@ -168,6 +168,28 @@ fn builtinWriteFile(path: []const u8, data: []const u8) void {
     file.writeAll(data) catch @panic("write_file: write failed");
 }
 
+fn builtinPathJoin(a: []const u8, b: []const u8) Value {
+    if (b.len > 0 and (b[0] == '/' or b[0] == '\\')) return .{ .str = b };
+    if (b.len >= 2 and ((b[0] >= 'A' and b[0] <= 'Z') or (b[0] >= 'a' and b[0] <= 'z')) and b[1] == ':') return .{ .str = b };
+    if (a.len == 0) return .{ .str = b };
+
+    const a_has_sep = a[a.len - 1] == '/' or a[a.len - 1] == '\\';
+    const need_sep = !a_has_sep;
+
+    const out_len = a.len + (if (need_sep) @as(usize, 1) else 0) + b.len;
+    const buf = allocator.alloc(u8, out_len) catch @panic("oom");
+
+    var i: usize = 0;
+    std.mem.copyForwards(u8, buf[i .. i + a.len], a);
+    i += a.len;
+    if (need_sep) {
+        buf[i] = '/';
+        i += 1;
+    }
+    std.mem.copyForwards(u8, buf[i .. i + b.len], b);
+    return .{ .str = buf };
+}
+
 // --- Bytecode VM (Zig runtime) ---
 // This executes the bytecode emitted by `src/compiler_core.vex`.
 //
@@ -753,6 +775,10 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
         const data = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
         builtinWriteFile(path, data);
         return makeInt(0);
+    } else if (std.mem.eql(u8, name, "path_join")) {
+        const a = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const b = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        return builtinPathJoin(a, b);
     } else if (std.mem.eql(u8, name, "arg_len")) {
         return makeInt(@intCast(bcListLen(prog_args)));
     } else if (std.mem.eql(u8, name, "arg_get")) {
@@ -1401,6 +1427,10 @@ fn evalPrimary(env: *Env) Value {
             const data = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
             builtinWriteFile(path, data);
             result = makeInt(0);
+        } else if (std.mem.eql(u8, name, "path_join")) {
+            const a = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const b = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            result = builtinPathJoin(a, b);
         } else if (std.mem.eql(u8, name, "arg_len")) {
             result = builtinArgLen();
         } else if (std.mem.eql(u8, name, "arg_get")) {

@@ -1,0 +1,5 @@
+use "./import_lib.vex"
+
+fn main() {
+    greet("world")
+}
