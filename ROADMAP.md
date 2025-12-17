@@ -12,6 +12,7 @@ This is where we left off and where to go next.
   - Supports string interpolation: `{name}`, `{fib(16)}`, and `\n` escapes.
   - Supports dot: `.name` yields `"name"` and `obj.field` lowers to `env_find(obj, "field")`.
   - Has builtins for env, strings, lists, filesystem IO, and argv access.
+  - Can run `.vbc` bytecode files via `vex runbc <file.vbc> [args...]`.
 
 - Core self-hosting compiler (`src/compiler_core.vex`):
   - `tokenize(src)` implemented in Vex.
@@ -22,7 +23,8 @@ This is where we left off and where to go next.
     - `vex bc <file.vex> [args...]` compiles to bytecode and runs it.
     - `vex bcvex <file.vex> [args...]` compiles to bytecode and runs it via the Vex VM (debug).
     - `vex bcdump <file.vex>` dumps bytecode (debug).
-  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, `vex eval <file.vex> [args...]`, `vex bc <file.vex> [args...]`, `vex bcvex <file.vex> [args...]`, and `vex bcdump <file.vex>`.
+    - `vex bcsave <file.vex> <out.vbc>` compiles to bytecode and writes a `.vbc` file.
+  - Wired into CLI: `vex lex <file.vex>`, `vex parse <file.vex> [dump]`, `vex eval <file.vex> [args...]`, `vex bc <file.vex> [args...]`, `vex bcvex <file.vex> [args...]`, `vex bcdump <file.vex>`, `vex bcsave <file.vex> <out.vbc>`, and `vex runbc <file.vbc> [args...]`.
 
 - Vex-side compiler sketch (`src/compiler.vex`):
   - Defines `TokenKind` / `Token` matching the interpreter's lexer.
@@ -79,7 +81,8 @@ This is where we left off and where to go next.
      - Either a small bytecode for a Vex VM, or a simple SSA-style IR.
    - (Done for Core Vex) `compiler_core.vex` lowers AST -> bytecode.
    - (Done) Zig runtime can execute that bytecode (`bc_run`).
-   - Next: serialize bytecode to disk + add a `vex runbc` path so programs can run without interpreting `compiler_core.vex`.
+   - (Done) Serialize bytecode to disk (`vex bcsave`) + run it without Vex parsing (`vex runbc`).
+   - Next: bootstrap `src/compiler_core.vex` as a `.vbc` and use that to rebuild itself (stage-2 loop).
 
 8. GPU / @accel story
    - Decide on the first real `@accel` target (CUDA via LLVM, or a simpler CPU vector path).

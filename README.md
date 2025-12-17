@@ -26,6 +26,8 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Compile to bytecode + run (self-hosting step): `zig build run -- bc examples/hello.vex`
 - Compile to bytecode + run using the Vex VM (debug): `zig build run -- bcvex examples/hello.vex`
 - Dump bytecode (debug): `zig build run -- bcdump examples/hello.vex`
+- Save bytecode to disk: `zig build run -- bcsave examples/hello.vex hello.vbc`
+- Run saved bytecode (no Vex parsing): `zig build run -- runbc hello.vbc`
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`

@@ -2840,8 +2840,10 @@ fn main() {
     let do_bc = 0
     let do_bcvex = 0
     let do_bcdump = 0
+    let do_bcsave = 0
     let dump_tree = 0
     let path = "src/vex.vex"
+    let out_path = ""
     if 1 < arg_len() {
         let first = arg_get(1)
 
@@ -2873,11 +2875,17 @@ fn main() {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
+        if str_eq(first, "bcsave") {
+            let do_bcsave = 1
+            if 2 < arg_len() { let path = arg_get(2) }
+            if 3 < arg_len() { let out_path = arg_get(3) }
+        }
+
         if do_parse == 0 and do_eval == 0 and str_eq(first, "lex") {
             if 2 < arg_len() { let path = arg_get(2) }
         }
 
-        if do_parse == 0 and do_eval == 0 and do_bc == 0 and do_bcvex == 0 and do_bcdump == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 and str_eq(first, "bc") == 0 and str_eq(first, "bcvex") == 0 and str_eq(first, "bcdump") == 0 {
+        if do_parse == 0 and do_eval == 0 and do_bc == 0 and do_bcvex == 0 and do_bcdump == 0 and do_bcsave == 0 and str_eq(first, "lex") == 0 and str_eq(first, "parse") == 0 and str_eq(first, "eval") == 0 and str_eq(first, "bc") == 0 and str_eq(first, "bcvex") == 0 and str_eq(first, "bcdump") == 0 and str_eq(first, "bcsave") == 0 {
             let path = first
         }
     }
@@ -2937,6 +2945,18 @@ fn main() {
         let prog = parse_program(toks)
         let bc_funcs = bc_compile_program(prog)
         bc_dump_program(prog, bc_funcs)
+        return
+    }
+
+    if do_bcsave == 1 {
+        if str_len(out_path) == 0 {
+            print("error: missing output path\n")
+            return
+        }
+        let prog = parse_program(toks)
+        let bc_funcs = bc_compile_program(prog)
+        bc_save(bc_funcs, out_path)
+        print("wrote {out_path}\n")
         return
     }
 

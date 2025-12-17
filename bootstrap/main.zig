@@ -1,7 +1,8 @@
 // bootstrap/main.zig - v0.0.4 LIVE INTERPRETER (NO LLVM)
 const std = @import("std");
 const print = std.debug.print;
-const allocator = std.heap.page_allocator;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const allocator = gpa.allocator();
 
 const Value = union(enum) {
     int: i64,
@@ -335,6 +336,322 @@ fn bcRunProgram(bc_funcs: Value, prog_args: Value) Value {
     return makeInt(0);
 }
 
+// --- Bytecode file format (VBC1) ---
+// Binary serialization for the list-based bytecode emitted by `src/compiler_core.vex`.
+// Strings are interned into a table so operands can refer to u32 indices.
+const VbcMagic = "VBC1";
+
+fn kvEnvPtr(handle: Value) ?*KVEnv {
+    if (isZeroInt(handle)) return null;
+    const addr = @as(usize, @intCast(expectInt(handle)));
+    return @as(*KVEnv, @ptrFromInt(addr));
+}
+
+fn bcExpectStrStrict(v: Value) []const u8 {
+    return switch (v) {
+        .str => |s| s,
+        .int => @panic("vbc: expected string"),
+    };
+}
+
+fn bcInternString(map: *std.StringHashMap(u32), strings: *std.ArrayList([]const u8), s: []const u8) u32 {
+    if (map.get(s)) |idx| return idx;
+    const max_u32: usize = @intCast(std.math.maxInt(u32));
+    if (strings.items.len >= max_u32) @panic("vbc: too many strings");
+    const idx: u32 = @intCast(strings.items.len);
+    strings.append(s) catch @panic("oom");
+    map.put(s, idx) catch @panic("oom");
+    return idx;
+}
+
+fn bcStringIndex(map: *std.StringHashMap(u32), s: []const u8) u32 {
+    if (map.get(s)) |idx| return idx;
+    @panic("vbc: missing interned string");
+}
+
+fn bcU32FromValue(v: Value) u32 {
+    const n = expectInt(v);
+    if (n < 0) @panic("vbc: negative u32");
+    const max_u32: i64 = @intCast(std.math.maxInt(u32));
+    if (n > max_u32) @panic("vbc: u32 overflow");
+    return @intCast(n);
+}
+
+fn bcU8FromValue(v: Value) u8 {
+    const n = expectInt(v);
+    const max_u8: i64 = @intCast(std.math.maxInt(u8));
+    if (n < 0 or n > max_u8) @panic("vbc: u8 overflow");
+    return @intCast(n);
+}
+
+fn bcSave(bc_funcs: Value, out_path: []const u8) void {
+    const env_ptr = kvEnvPtr(bc_funcs) orelse @panic("bc_save: invalid env");
+
+    var funcs = std.ArrayList(struct { name: []const u8, rec: Value }).init(allocator);
+    defer funcs.deinit();
+
+    var string_to_idx = std.StringHashMap(u32).init(allocator);
+    defer string_to_idx.deinit();
+
+    var strings = std.ArrayList([]const u8).init(allocator);
+    defer strings.deinit();
+
+    var it = env_ptr.map.iterator();
+    while (it.next()) |e| {
+        const fname = e.key_ptr.*;
+        const rec = e.value_ptr.*;
+        funcs.append(.{ .name = fname, .rec = rec }) catch @panic("oom");
+
+        _ = bcInternString(&string_to_idx, &strings, fname);
+        _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(rec, 0)));
+
+        const params = bcListGet(rec, 1);
+        const nparams = bcListLen(params);
+        for (0..nparams) |pi| {
+            _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(params, pi)));
+        }
+
+        const code = bcListGet(rec, 2);
+        const ncode = bcListLen(code);
+        for (0..ncode) |ip| {
+            const ins = bcListGet(code, ip);
+            const op = bcU8FromValue(bcListGet(ins, 0));
+            switch (op) {
+                1 => {}, // PUSH_INT
+                2 => { // PUSH_STR
+                    _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(ins, 1)));
+                },
+                3, 4 => { // LOAD/STORE
+                    _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(ins, 1)));
+                },
+                10 => {}, // BIN
+                11 => { // CALL
+                    _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(ins, 1)));
+                },
+                12 => {}, // POP
+                13, 14 => {}, // JMP/JMP_Z
+                15, 16 => {}, // RET/PRINT
+                17 => { // PRINT_STR
+                    _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(ins, 1)));
+                },
+                18 => {}, // DUP2
+                19, 20 => {}, // TMP_SET/TMP_GET
+                99 => { // TRAP
+                    _ = bcInternString(&string_to_idx, &strings, bcExpectStrStrict(bcListGet(ins, 1)));
+                },
+                else => @panic("vbc: unsupported op"),
+            }
+        }
+    }
+
+    var file = std.fs.cwd().createFile(out_path, .{ .truncate = true }) catch @panic("bc_save: create failed");
+    defer file.close();
+    var w = file.writer();
+
+    w.writeAll(VbcMagic) catch @panic("bc_save: write failed");
+    w.writeInt(u32, @intCast(strings.items.len), .little) catch @panic("bc_save: write failed");
+    for (strings.items) |s| {
+        w.writeInt(u32, @intCast(s.len), .little) catch @panic("bc_save: write failed");
+        w.writeAll(s) catch @panic("bc_save: write failed");
+    }
+
+    w.writeInt(u32, @intCast(funcs.items.len), .little) catch @panic("bc_save: write failed");
+    for (funcs.items) |f| {
+        const name_idx = bcStringIndex(&string_to_idx, f.name);
+        w.writeInt(u32, name_idx, .little) catch @panic("bc_save: write failed");
+
+        const params = bcListGet(f.rec, 1);
+        const nparams = bcListLen(params);
+        w.writeInt(u32, @intCast(nparams), .little) catch @panic("bc_save: write failed");
+        for (0..nparams) |pi| {
+            const p = bcExpectStrStrict(bcListGet(params, pi));
+            const p_idx = bcStringIndex(&string_to_idx, p);
+            w.writeInt(u32, p_idx, .little) catch @panic("bc_save: write failed");
+        }
+
+        const code = bcListGet(f.rec, 2);
+        const ncode = bcListLen(code);
+        w.writeInt(u32, @intCast(ncode), .little) catch @panic("bc_save: write failed");
+        for (0..ncode) |ip| {
+            const ins = bcListGet(code, ip);
+            const op = bcU8FromValue(bcListGet(ins, 0));
+            w.writeByte(op) catch @panic("bc_save: write failed");
+
+            switch (op) {
+                1 => { // PUSH_INT
+                    w.writeInt(i64, expectInt(bcListGet(ins, 1)), .little) catch @panic("bc_save: write failed");
+                },
+                2 => { // PUSH_STR
+                    const s = bcExpectStrStrict(bcListGet(ins, 1));
+                    const s_idx = bcStringIndex(&string_to_idx, s);
+                    w.writeInt(u32, s_idx, .little) catch @panic("bc_save: write failed");
+                },
+                3, 4 => { // LOAD/STORE
+                    const s = bcExpectStrStrict(bcListGet(ins, 1));
+                    const s_idx = bcStringIndex(&string_to_idx, s);
+                    w.writeInt(u32, s_idx, .little) catch @panic("bc_save: write failed");
+                },
+                10 => { // BIN
+                    w.writeInt(i64, expectInt(bcListGet(ins, 1)), .little) catch @panic("bc_save: write failed");
+                },
+                11 => { // CALL
+                    const s = bcExpectStrStrict(bcListGet(ins, 1));
+                    const s_idx = bcStringIndex(&string_to_idx, s);
+                    w.writeInt(u32, s_idx, .little) catch @panic("bc_save: write failed");
+                    const argc = bcU32FromValue(bcListGet(ins, 2));
+                    w.writeInt(u32, argc, .little) catch @panic("bc_save: write failed");
+                },
+                12 => {}, // POP
+                13, 14 => { // JMP/JMP_Z
+                    const target = bcU32FromValue(bcListGet(ins, 1));
+                    w.writeInt(u32, target, .little) catch @panic("bc_save: write failed");
+                },
+                15, 16 => {}, // RET/PRINT
+                17 => { // PRINT_STR
+                    const s = bcExpectStrStrict(bcListGet(ins, 1));
+                    const s_idx = bcStringIndex(&string_to_idx, s);
+                    w.writeInt(u32, s_idx, .little) catch @panic("bc_save: write failed");
+                },
+                18 => {}, // DUP2
+                19, 20 => { // TMP_SET/TMP_GET
+                    const idx = bcU32FromValue(bcListGet(ins, 1));
+                    w.writeInt(u32, idx, .little) catch @panic("bc_save: write failed");
+                },
+                99 => { // TRAP
+                    const s = bcExpectStrStrict(bcListGet(ins, 1));
+                    const s_idx = bcStringIndex(&string_to_idx, s);
+                    w.writeInt(u32, s_idx, .little) catch @panic("bc_save: write failed");
+                },
+                else => @panic("vbc: unsupported op"),
+            }
+        }
+    }
+}
+
+fn bcReadU8(bytes: []const u8, idx: *usize) u8 {
+    if (idx.* >= bytes.len) @panic("vbc: eof");
+    const b = bytes[idx.*];
+    idx.* += 1;
+    return b;
+}
+
+fn bcReadU32(bytes: []const u8, idx: *usize) u32 {
+    if (idx.* + 4 > bytes.len) @panic("vbc: eof");
+    const ptr: *const [4]u8 = @ptrCast(bytes[idx.* .. idx.* + 4].ptr);
+    const v = std.mem.readInt(u32, ptr, .little);
+    idx.* += 4;
+    return v;
+}
+
+fn bcReadI64(bytes: []const u8, idx: *usize) i64 {
+    if (idx.* + 8 > bytes.len) @panic("vbc: eof");
+    const ptr: *const [8]u8 = @ptrCast(bytes[idx.* .. idx.* + 8].ptr);
+    const v = std.mem.readInt(i64, ptr, .little);
+    idx.* += 8;
+    return v;
+}
+
+fn bcReadBytes(bytes: []const u8, idx: *usize, len: usize) []const u8 {
+    if (idx.* + len > bytes.len) @panic("vbc: eof");
+    const out = bytes[idx.* .. idx.* + len];
+    idx.* += len;
+    return out;
+}
+
+fn bcLoadFromBytes(bytes: []const u8) Value {
+    if (bytes.len < VbcMagic.len or !std.mem.eql(u8, bytes[0..VbcMagic.len], VbcMagic)) {
+        @panic("vbc: bad magic");
+    }
+
+    var idx: usize = VbcMagic.len;
+    const str_count_u32 = bcReadU32(bytes, &idx);
+    const str_count: usize = @intCast(str_count_u32);
+    const strings = allocator.alloc([]const u8, str_count) catch @panic("oom");
+
+    for (0..str_count) |si| {
+        const len = bcReadU32(bytes, &idx);
+        strings[si] = bcReadBytes(bytes, &idx, len);
+    }
+
+    const func_count: usize = @intCast(bcReadU32(bytes, &idx));
+    const bc_funcs = builtinEnvCreate(null);
+
+    for (0..func_count) |_| {
+        const name_idx: usize = @intCast(bcReadU32(bytes, &idx));
+        if (name_idx >= str_count) @panic("vbc: bad name idx");
+        const name = strings[name_idx];
+
+        const param_count: usize = @intCast(bcReadU32(bytes, &idx));
+        const params = builtinListCreate();
+        for (0..param_count) |_| {
+            const p_idx: usize = @intCast(bcReadU32(bytes, &idx));
+            if (p_idx >= str_count) @panic("vbc: bad param idx");
+            builtinListPush(params, .{ .str = strings[p_idx] });
+        }
+
+        const ins_count: usize = @intCast(bcReadU32(bytes, &idx));
+        const code = builtinListCreate();
+        for (0..ins_count) |_| {
+            const op: u8 = bcReadU8(bytes, &idx);
+            const ins = builtinListCreate();
+            builtinListPush(ins, makeInt(op));
+            switch (op) {
+                1 => { // PUSH_INT
+                    builtinListPush(ins, makeInt(bcReadI64(bytes, &idx)));
+                },
+                2 => { // PUSH_STR
+                    const s_idx: usize = @intCast(bcReadU32(bytes, &idx));
+                    if (s_idx >= str_count) @panic("vbc: bad str idx");
+                    builtinListPush(ins, .{ .str = strings[s_idx] });
+                },
+                3, 4 => { // LOAD/STORE
+                    const s_idx: usize = @intCast(bcReadU32(bytes, &idx));
+                    if (s_idx >= str_count) @panic("vbc: bad str idx");
+                    builtinListPush(ins, .{ .str = strings[s_idx] });
+                },
+                10 => { // BIN
+                    builtinListPush(ins, makeInt(bcReadI64(bytes, &idx)));
+                },
+                11 => { // CALL
+                    const s_idx: usize = @intCast(bcReadU32(bytes, &idx));
+                    if (s_idx >= str_count) @panic("vbc: bad call idx");
+                    builtinListPush(ins, .{ .str = strings[s_idx] });
+                    builtinListPush(ins, makeInt(@intCast(bcReadU32(bytes, &idx))));
+                },
+                12 => {}, // POP
+                13, 14 => { // JMP/JMP_Z
+                    builtinListPush(ins, makeInt(@intCast(bcReadU32(bytes, &idx))));
+                },
+                15, 16 => {}, // RET/PRINT
+                17 => { // PRINT_STR
+                    const s_idx: usize = @intCast(bcReadU32(bytes, &idx));
+                    if (s_idx >= str_count) @panic("vbc: bad str idx");
+                    builtinListPush(ins, .{ .str = strings[s_idx] });
+                },
+                18 => {}, // DUP2
+                19, 20 => { // TMP_SET/TMP_GET
+                    builtinListPush(ins, makeInt(@intCast(bcReadU32(bytes, &idx))));
+                },
+                99 => { // TRAP
+                    const s_idx: usize = @intCast(bcReadU32(bytes, &idx));
+                    if (s_idx >= str_count) @panic("vbc: bad str idx");
+                    builtinListPush(ins, .{ .str = strings[s_idx] });
+                },
+                else => @panic("vbc: unsupported op"),
+            }
+            builtinListPush(code, ins);
+        }
+
+        const func_rec = builtinListCreate();
+        builtinListPush(func_rec, .{ .str = name });
+        builtinListPush(func_rec, params);
+        builtinListPush(func_rec, code);
+        builtinEnvSet(bc_funcs, name, func_rec);
+    }
+
+    return bc_funcs;
+}
+
 fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller_defs: Value, bc_funcs: Value, prog_args: Value) Value {
     // Builtins
     if (std.mem.eql(u8, name, "env_create")) {
@@ -416,6 +733,11 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
         if (idx >= n) return .{ .str = "" };
         const v = bcListGet(prog_args, idx);
         return .{ .str = expectStr(v) };
+    } else if (std.mem.eql(u8, name, "bc_save")) {
+        const new_bc_funcs = if (args.len > 0) args[0] else makeInt(0);
+        const out_path = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        bcSave(new_bc_funcs, out_path);
+        return makeInt(0);
     } else if (std.mem.eql(u8, name, "bc_run")) {
         const new_bc_funcs = if (args.len > 0) args[0] else makeInt(0);
         const new_prog_args = if (args.len > 1) args[1] else makeInt(0);
@@ -1054,6 +1376,11 @@ fn evalPrimary(env: *Env) Value {
         } else if (std.mem.eql(u8, name, "arg_get")) {
             const idx_val = if (args.len > 0) args[0] else makeInt(0);
             result = builtinArgGet(idx_val);
+        } else if (std.mem.eql(u8, name, "bc_save")) {
+            const bc_funcs = if (args.len > 0) args[0] else makeInt(0);
+            const out_path = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            bcSave(bc_funcs, out_path);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "bc_run")) {
             const bc_funcs = if (args.len > 0) args[0] else makeInt(0);
             const prog_args = if (args.len > 1) args[1] else makeInt(0);
@@ -1678,6 +2005,8 @@ pub fn main() !void {
                  \\  vex [--verbose|-v] bc <file.vex> [args...]
                  \\  vex [--verbose|-v] bcvex <file.vex> [args...]
                  \\  vex [--verbose|-v] bcdump <file.vex>
+                 \\  vex [--verbose|-v] bcsave <file.vex> <out.vbc>
+                 \\  vex [--verbose|-v] runbc <file.vbc> [args...]
                  \\
                  \\Notes:
                  \\  - with no args, runs `src/vex.vex`
@@ -1685,6 +2014,30 @@ pub fn main() !void {
                 \\  - `arg_get(1..)` are script arguments
                 \\
             , .{});
+            return;
+        }
+
+        if (std.mem.eql(u8, cmd, "runbc")) {
+            if (host_args.len <= argi + 1) {
+                print("error: missing file\n", .{});
+                return;
+            }
+
+            if (verbose) {
+                print("\nVEX v0.0.4 - LIVE INTERPRETER - NO LLVM - RUNS NOW\n\n", .{});
+            }
+
+            const bc_path = host_args[argi + 1];
+            const bc_bytes = std.fs.cwd().readFileAlloc(allocator, bc_path, 64 * 1024 * 1024) catch {
+                print("error: failed to read {s}\n", .{bc_path});
+                return;
+            };
+            defer allocator.free(bc_bytes);
+
+            const bc_funcs = bcLoadFromBytes(bc_bytes);
+            const prog_args = builtinListCreate();
+            for (host_args[(argi + 1)..]) |a| builtinListPush(prog_args, .{ .str = a });
+            _ = bcRunProgram(bc_funcs, prog_args);
             return;
         }
 
@@ -1737,7 +2090,7 @@ pub fn main() !void {
 
             file_path = compiler_script;
             script_args = args_buf;
-        } else if (std.mem.eql(u8, cmd, "bc") or std.mem.eql(u8, cmd, "bcvex") or std.mem.eql(u8, cmd, "bcdump")) {
+        } else if (std.mem.eql(u8, cmd, "bc") or std.mem.eql(u8, cmd, "bcvex") or std.mem.eql(u8, cmd, "bcdump") or std.mem.eql(u8, cmd, "bcsave")) {
             if (host_args.len <= argi + 1) {
                 print("error: missing file\n", .{});
                 return;
