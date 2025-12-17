@@ -1,15 +1,12 @@
-# Vex - the final systems language
+# Vex
 
-- Rust-level safety (zero-cost, zero-annotation)
-- Go-level simplicity
-- Zig-level comptime
-- Mojo-level AI acceleration
-- Compiles 10× faster than anything that has ever existed
+Vex is an experimental bootstrapping language + runtime.
 
-We are not building another language.  
-We are ending the war.
+This repo currently contains:
+- a Zig-based bootstrap interpreter (`bootstrap/main.zig`)
+- a Vex-written “core compiler” (`src/compiler_core.vex`) that can tokenize/parse/eval Core Vex and compile it to bytecode (`.vbc`)
 
-**Current status**: Day 0 - bootstrap armed on RTX 4060 Ti.
+**Current status**: early bootstrap (rapidly changing).
 
 ## Try it
 
