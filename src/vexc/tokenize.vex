@@ -70,6 +70,8 @@ fn vexc_kind_name(k) {
     if k == 34 { return "For" }
     if k == 35 { return "In" }
     if k == 36 { return "DotDot" }
+    if k == 37 { return "LBracket" }
+    if k == 38 { return "RBracket" }
     if k == 39 { return "Break" }
     if k == 40 { return "Continue" }
     return "Unknown"
@@ -178,6 +180,10 @@ fn vexc_tokenize(src) {
         // braces
         if handled == 0 and c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; let handled = 1 }
+
+        // brackets
+        if handled == 0 and c == 91 { list_push(toks, 37); list_push(toks, "["); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 93 { list_push(toks, 38); list_push(toks, "]"); let i = i + 1; let handled = 1 }
 
         // ..
         if handled == 0 and c == 46 and (i + 1) < n and str_char(src, i + 1) == 46 {

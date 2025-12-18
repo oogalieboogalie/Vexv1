@@ -15,6 +15,71 @@ fn vexc_res(kind, value) {
 fn vexc_res_has(r) { return list_get(r, 0) }
 fn vexc_res_val(r) { return list_get(r, 1) }
 
+fn vexc_is_ident_char(c) {
+    let ok = 0
+    if c == 95 { let ok = 1 }
+    if ok == 0 and 47 < c and c < 58 { let ok = 1 }
+    if ok == 0 and 64 < c and c < 91 { let ok = 1 }
+    if ok == 0 and 96 < c and c < 123 { let ok = 1 }
+    return ok
+}
+
+fn vexc_render_string(vals_env, defs_env, raw) {
+    let i = 0
+    let n = str_len(raw)
+    while i < n {
+        let c = str_char(raw, i)
+
+        if c == 123 {
+            let j = i + 1
+            while j < n and str_char(raw, j) != 125 { let j = j + 1 }
+
+            if j < n {
+                let expr = str_slice(raw, i + 1, j)
+                let k = 0
+                let elen = str_len(expr)
+
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+                let start_name = k
+                while k < elen and vexc_is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                let name = str_slice(expr, start_name, k)
+
+                let def = env_find(defs_env, name)
+                if def != 0 {
+                    let v = env_find(vals_env, name)
+                    print(v)
+                }
+                if def == 0 {
+                    print_char(123)
+                    print_bytes(name)
+                    print_char(125)
+                }
+
+                let i = j + 1
+            }
+
+            if j >= n {
+                print_char(123)
+                let i = i + 1
+            }
+        }
+
+        if c != 123 {
+            let handled = 0
+            if c == 92 and (i + 1) < n and str_char(raw, i + 1) == 110 {
+                print_char(10)
+                let i = i + 2
+                let handled = 1
+            }
+            if handled == 0 {
+                print_char(c)
+                let i = i + 1
+            }
+        }
+    }
+    return 0
+}
+
 fn vexc_env_get(vals_env, defs_env, name) {
     let def = env_find(defs_env, name)
     if def == 0 {
@@ -173,8 +238,13 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env) {
 
     if tag == 201 {
         let expr = list_get(stmt, 1)
-        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env)
-        print(v)
+        if list_get(expr, 0) == 301 {
+            vexc_render_string(vals_env, defs_env, list_get(expr, 1))
+        }
+        if list_get(expr, 0) != 301 {
+            let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env)
+            print(v)
+        }
         return vexc_res(0, 0)
     }
 

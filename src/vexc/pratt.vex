@@ -155,6 +155,24 @@ fn vexc_parse_expr_bp(toks, pos, min_bp) {
         let lhs = node
     }
 
+    // indexing postfix: xs[i] -> list_get(xs, i)
+    while vexc_tok_kind(toks, pos) == 37 {
+        let r2 = vexc_parse_expr_bp(toks, pos + 1, 0)
+        let idx_expr = vexc_pair_node(r2)
+        let pos = vexc_pair_pos(r2)
+        if vexc_tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+
+        let args = list_create()
+        list_push(args, lhs)
+        list_push(args, idx_expr)
+
+        let node = list_create()
+        list_push(node, 304)
+        list_push(node, "list_get")
+        list_push(node, args)
+        let lhs = node
+    }
+
     while 1 {
         let op = vexc_tok_kind(toks, pos)
         let l_bp = vexc_infix_lbp(op)
