@@ -273,6 +273,22 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env) {
         return vexc_res(0, 0)
     }
 
+    if tag == 208 {
+        let op = list_get(stmt, 1)
+        let name = list_get(stmt, 2)
+        let idx = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env)
+        let rhs = vexc_eval_expr(list_get(stmt, 4), funcs_env, vals_env, defs_env)
+        let list_handle = vexc_env_get(vals_env, defs_env, name)
+
+        let out = rhs
+        if op == 30 {
+            let old = list_get(list_handle, idx)
+            let out = old + out
+        }
+        list_set(list_handle, idx, out)
+        return vexc_res(0, 0)
+    }
+
     if tag == 202 {
         let expr = list_get(stmt, 1)
         let v = 0

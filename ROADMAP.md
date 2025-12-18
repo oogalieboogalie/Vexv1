@@ -76,6 +76,7 @@ This is where we left off and where to go next.
      - `examples/vexc_run_file_demo.vex` (parses + runs `examples/vexc_input_sum.vex`)
        - Also runs `examples/vexc_input_break_continue.vex`, `examples/vexc_input_builtins.vex`, and `examples/vexc_input_strings.vex`.
      - `examples/vexc_run_for_index_example.vex` (runs `examples/for_index.vex` under vexc; exercises `for`, `xs[i]`, and string interpolation)
+     - `examples/vexc_run_index_assign_example.vex` (runs `examples/index_assign.vex` under vexc; exercises `xs[i] = v` / `xs[i] += v`)
 
 ## Medium-Term Goals
 
