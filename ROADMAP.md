@@ -73,6 +73,7 @@ This is where we left off and where to go next.
    - (Started) `src/vexc/tokenize.vex` + `src/vexc/pratt.vex` + `src/vexc/stmt.vex` + `src/vexc/eval.vex` with demos:
      - `examples/vexc_expr_demo.vex`
      - `examples/vexc_stmt_demo.vex`
+     - `examples/vexc_run_file_demo.vex` (parses + runs `examples/vexc_input_sum.vex`)
 
 ## Medium-Term Goals
 

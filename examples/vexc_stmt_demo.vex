@@ -23,9 +23,10 @@ fn main() {
     let br = vexc_parse_block(toks, 0)
     let block = vexc_pair_node(br)
 
+    let funcs = env_create()
     let vals = env_create()
     let defs = env_create()
-    let r = vexc_eval_block(block, vals, defs)
+    let r = vexc_eval_block(block, funcs, vals, defs)
     let v = vexc_res_val(r)
     print("eval_return={v}\n")
 }

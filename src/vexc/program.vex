@@ -1,0 +1,76 @@
+// src/vexc/program.vex
+// Parse a program of top-level `fn` definitions into the same list-AST tags as `compiler_core.vex`.
+//
+// Program: [100, funcs]
+// Func:    [101, name, p1, p2, p3, is_accel, body_block, params]
+
+use "./stmt.vex"
+
+fn vexc_parse_func(toks, pos, is_accel) {
+    // consume 'fn'
+    if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
+
+    let name = vexc_tok_text(toks, pos)
+    if vexc_tok_kind(toks, pos) == 1 { let pos = pos + 1 }
+
+    let p1 = ""
+    let p2 = ""
+    let p3 = ""
+    let params = list_create()
+    let param_i = 0
+
+    if vexc_tok_kind(toks, pos) == 11 {
+        let pos = pos + 1
+        while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
+            if vexc_tok_kind(toks, pos) == 1 {
+                if param_i == 0 { let p1 = vexc_tok_text(toks, pos) }
+                if param_i == 1 { let p2 = vexc_tok_text(toks, pos) }
+                if param_i == 2 { let p3 = vexc_tok_text(toks, pos) }
+                list_push(params, vexc_tok_text(toks, pos))
+                let param_i = param_i + 1
+            }
+            let pos = pos + 1
+        }
+        if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+    }
+
+    while vexc_tok_kind(toks, pos) != 13 and vexc_tok_kind(toks, pos) != 0 { let pos = pos + 1 }
+    let br = vexc_parse_block(toks, pos)
+    let body = vexc_pair_node(br)
+    let pos = vexc_pair_pos(br)
+
+    let node = list_create()
+    list_push(node, 101)
+    list_push(node, name)
+    list_push(node, p1)
+    list_push(node, p2)
+    list_push(node, p3)
+    list_push(node, is_accel)
+    list_push(node, body)
+    list_push(node, params)
+    return vexc_pair(node, pos)
+}
+
+fn vexc_parse_program(toks, pos) {
+    let funcs = list_create()
+
+    while vexc_tok_kind(toks, pos) != 0 {
+        // accel tag not wired yet; skip
+        let is_accel = 0
+
+        if vexc_tok_kind(toks, pos) == 6 {
+            let fr = vexc_parse_func(toks, pos, is_accel)
+            list_push(funcs, vexc_pair_node(fr))
+            let pos = vexc_pair_pos(fr)
+        }
+
+        if vexc_tok_kind(toks, pos) != 6 {
+            let pos = pos + 1
+        }
+    }
+
+    let prog = list_create()
+    list_push(prog, 100)
+    list_push(prog, funcs)
+    return prog
+}

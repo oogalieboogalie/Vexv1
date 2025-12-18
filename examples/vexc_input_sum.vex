@@ -1,0 +1,13 @@
+fn sum(n) {
+  let i = 0
+  let acc = 0
+  while i < n {
+    acc = acc + i
+    i = i + 1
+  }
+  return acc
+}
+
+fn main() {
+  return sum(10)
+}

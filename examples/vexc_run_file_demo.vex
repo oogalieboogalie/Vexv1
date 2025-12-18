@@ -1,0 +1,11 @@
+use "../src/vexc/tokenize.vex"
+use "../src/vexc/program.vex"
+use "../src/vexc/eval.vex"
+
+fn main() {
+    let src = read_file("examples/vexc_input_sum.vex")
+    let toks = vexc_tokenize(src)
+    let prog = vexc_parse_program(toks, 0)
+    let v = vexc_eval_program(prog)
+    print("vexc_eval_program returned {v}\n")
+}

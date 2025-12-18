@@ -31,6 +31,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Imports (top-level): `use "./file.vex"` (demo: `zig build run -- examples/import_main.vex` or `zig build run -- eval examples/import_main.vex`)
 - Pratt expr parser demo (ported from `src/compiler.vex` ideas): `zig build run -- eval examples/vexc_expr_demo.vex`
 - Pratt + stmt/block parser demo (WIP Vex-in-Vex): `zig build run -- eval examples/vexc_stmt_demo.vex`
+- Vex-in-Vex program demo (parses `fn` + calls + while): `zig build run -- eval examples/vexc_run_file_demo.vex`
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`

@@ -47,6 +47,7 @@ fn vexc_infix_lbp(op) {
     if op == 20 or op == 21 { return 100 }
     if op == 18 or op == 19 { return 90 }
     if op == 22 or op == 23 { return 80 }
+    if op == 16 or op == 17 { return 70 }
     return 0
 }
 
@@ -54,11 +55,31 @@ fn vexc_infix_rbp(op) {
     if op == 20 or op == 21 { return 101 }
     if op == 18 or op == 19 { return 91 }
     if op == 22 or op == 23 { return 81 }
+    if op == 16 or op == 17 { return 71 }
     return 0
 }
 
 fn vexc_prefix_expr(toks, pos) {
     let k = vexc_tok_kind(toks, pos)
+
+    if k == 31 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 1)
+        return vexc_pair(node, pos + 1)
+    }
+    if k == 32 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 0)
+        return vexc_pair(node, pos + 1)
+    }
+    if k == 33 {
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, 0)
+        return vexc_pair(node, pos + 1)
+    }
 
     if k == 2 {
         let txt = vexc_tok_text(toks, pos)
@@ -147,6 +168,8 @@ fn vexc_op_name(op) {
     if op == 21 { return "/" }
     if op == 22 { return "<" }
     if op == 23 { return "<=" }
+    if op == 16 { return "==" }
+    if op == 17 { return "!=" }
     return "?"
 }
 
