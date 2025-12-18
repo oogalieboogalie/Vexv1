@@ -1,0 +1,5 @@
+fn main() {
+  if "a" == "a" { return 1 }
+  if "a" != "b" { return 2 }
+  return 0
+}

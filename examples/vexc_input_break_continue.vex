@@ -1,0 +1,9 @@
+fn main() {
+  let acc = 0
+  for i in 0..10 {
+    if i == 5 { continue }
+    if i == 8 { break }
+    acc = acc + i
+  }
+  return acc
+}

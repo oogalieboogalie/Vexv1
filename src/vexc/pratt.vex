@@ -3,6 +3,7 @@
 //
 // AST tags match `src/compiler_core.vex`:
 // - int  [300, value]
+// - str  [301, value]
 // - name [302, ident]
 // - bin  [303, op_kind, left, right]
 // - call [304, callee, args]
@@ -41,6 +42,15 @@ fn vexc_parse_int(s) {
         let i = i + 1
     }
     return v
+}
+
+fn vexc_strip_quotes(s) {
+    let n = str_len(s)
+    if n < 2 { return s }
+    if str_char(s, 0) == 34 and str_char(s, n - 1) == 34 {
+        return str_slice(s, 1, n - 1)
+    }
+    return s
 }
 
 fn vexc_infix_lbp(op) {
@@ -86,6 +96,14 @@ fn vexc_prefix_expr(toks, pos) {
         let node = list_create()
         list_push(node, 300)
         list_push(node, vexc_parse_int(txt))
+        return vexc_pair(node, pos + 1)
+    }
+
+    if k == 3 {
+        let raw = vexc_tok_text(toks, pos)
+        let node = list_create()
+        list_push(node, 301)
+        list_push(node, vexc_strip_quotes(raw))
         return vexc_pair(node, pos + 1)
     }
 
@@ -182,6 +200,14 @@ fn vexc_dump_expr(expr, depth, max_depth) {
         let v = list_get(expr, 1)
         print("Int ")
         print(v)
+        print("\n")
+        return
+    }
+
+    if tag == 301 {
+        let s = list_get(expr, 1)
+        print("Str ")
+        print(s)
         print("\n")
         return
     }

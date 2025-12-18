@@ -3,9 +3,11 @@
 
 use "./program.vex"
 
-fn vexc_res(has_value, value) {
+// Return/control pair.
+// kind: 0=none, 1=return, 2=break, 3=continue
+fn vexc_res(kind, value) {
     let r = list_create()
-    list_push(r, has_value)
+    list_push(r, kind)
     list_push(r, value)
     return r
 }
@@ -26,6 +28,7 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env) {
     let tag = list_get(expr, 0)
 
     if tag == 300 { return list_get(expr, 1) }
+    if tag == 301 { return list_get(expr, 1) }
 
     if tag == 302 {
         let name = list_get(expr, 1)
@@ -69,6 +72,84 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env) {
         while i < argc {
             list_push(args, vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env))
             let i = i + 1
+        }
+
+        // Builtins
+        if name == "env_create" {
+            let parent = 0
+            if argc > 0 { let parent = list_get(args, 0) }
+            return env_create(parent)
+        }
+        if name == "env_set" {
+            let envh = 0
+            let key = ""
+            let val = 0
+            if argc > 0 { let envh = list_get(args, 0) }
+            if argc > 1 { let key = list_get(args, 1) }
+            if argc > 2 { let val = list_get(args, 2) }
+            env_set(envh, key, val)
+            return 0
+        }
+        if name == "env_find" {
+            let envh = 0
+            let key = ""
+            if argc > 0 { let envh = list_get(args, 0) }
+            if argc > 1 { let key = list_get(args, 1) }
+            return env_find(envh, key)
+        }
+
+        if name == "str_len" {
+            if argc > 0 { return str_len(list_get(args, 0)) }
+            return 0
+        }
+        if name == "str_char" {
+            if argc > 1 { return str_char(list_get(args, 0), list_get(args, 1)) }
+            return 0
+        }
+        if name == "str_slice" {
+            if argc > 2 { return str_slice(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+            return ""
+        }
+
+        if name == "print_bytes" {
+            if argc > 0 { print_bytes(list_get(args, 0)) }
+            return 0
+        }
+        if name == "print_char" {
+            if argc > 0 { print_char(list_get(args, 0)) }
+            return 0
+        }
+
+        if name == "list_create" { return list_create() }
+        if name == "list_push" {
+            if argc > 1 { list_push(list_get(args, 0), list_get(args, 1)) }
+            return 0
+        }
+        if name == "list_len" {
+            if argc > 0 { return list_len(list_get(args, 0)) }
+            return 0
+        }
+        if name == "list_get" {
+            if argc > 1 { return list_get(list_get(args, 0), list_get(args, 1)) }
+            return 0
+        }
+        if name == "list_set" {
+            if argc > 2 { list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+            return 0
+        }
+
+        if name == "read_file" {
+            if argc > 0 { return read_file(list_get(args, 0)) }
+            return ""
+        }
+        if name == "write_file" {
+            if argc > 1 { write_file(list_get(args, 0), list_get(args, 1)) }
+            return 0
+        }
+
+        if name == "path_join" {
+            if argc > 1 { return path_join(list_get(args, 0), list_get(args, 1)) }
+            return ""
         }
 
         let f = env_find(funcs_env, name)
@@ -129,13 +210,37 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env) {
         return vexc_res(1, v)
     }
 
+    if tag == 209 { return vexc_res(2, 0) }
+    if tag == 210 { return vexc_res(3, 0) }
+
     if tag == 204 {
         let cond = list_get(stmt, 1)
         let body = list_get(stmt, 2)
 
         while vexc_eval_expr(cond, funcs_env, vals_env, defs_env) != 0 {
             let r = vexc_eval_block(body, funcs_env, vals_env, defs_env)
-            if vexc_res_has(r) != 0 { return r }
+            let k = vexc_res_has(r)
+            if k == 1 { return r }
+            if k == 2 { return vexc_res(0, 0) }
+        }
+        return vexc_res(0, 0)
+    }
+
+    if tag == 207 {
+        let name = list_get(stmt, 1)
+        let start = vexc_eval_expr(list_get(stmt, 2), funcs_env, vals_env, defs_env)
+        let end = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env)
+        let body = list_get(stmt, 4)
+        while start < end {
+            if str_len(name) != 0 {
+                env_set(vals_env, name, start)
+                env_set(defs_env, name, 1)
+            }
+            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env)
+            let k = vexc_res_has(r)
+            if k == 1 { return r }
+            if k == 2 { return vexc_res(0, 0) }
+            let start = start + 1
         }
         return vexc_res(0, 0)
     }
@@ -190,7 +295,12 @@ fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs) {
 
     let body = list_get(func_node, 6)
     let r = vexc_eval_block(body, funcs_env, vals_env, defs_env)
-    if vexc_res_has(r) != 0 { return vexc_res_val(r) }
+    let k = vexc_res_has(r)
+    if k == 1 { return vexc_res_val(r) }
+    if k != 0 {
+        print("[vexc] error: break/continue escaped function\n")
+        return 0
+    }
     return 0
 }
 

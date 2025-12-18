@@ -1,0 +1,11 @@
+fn main() {
+  let e = env_create()
+  env_set(e, "k", 123)
+  let v = env_find(e, "k")
+
+  let xs = list_create()
+  list_push(xs, v)
+  list_push(xs, 7)
+
+  return list_get(xs, 0) + list_get(xs, 1)
+}
