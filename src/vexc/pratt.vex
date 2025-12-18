@@ -1,0 +1,229 @@
+// src/vexc/pratt.vex
+// Core-Vex Pratt expression parser + tiny evaluator over the AST.
+//
+// AST tags match `src/compiler_core.vex`:
+// - int  [300, value]
+// - name [302, ident]
+// - bin  [303, op_kind, left, right]
+// - call [304, callee, args]
+
+fn vexc_pair(a, b) {
+    let p = list_create()
+    list_push(p, a)
+    list_push(p, b)
+    return p
+}
+
+fn vexc_pair_node(p) { return list_get(p, 0) }
+fn vexc_pair_pos(p) { return list_get(p, 1) }
+
+fn vexc_tok_kind(toks, pos) {
+    let idx = pos * 2
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 0
+}
+
+fn vexc_tok_text(toks, pos) {
+    let idx = pos * 2 + 1
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return ""
+}
+
+fn vexc_parse_int(s) {
+    let v = 0
+    let i = 0
+    let n = str_len(s)
+    while i < n {
+        let c = str_char(s, i)
+        if c < 48 { return v }
+        if 57 < c { return v }
+        let v = v * 10 + (c - 48)
+        let i = i + 1
+    }
+    return v
+}
+
+fn vexc_infix_lbp(op) {
+    if op == 20 or op == 21 { return 100 }
+    if op == 18 or op == 19 { return 90 }
+    if op == 22 or op == 23 { return 80 }
+    return 0
+}
+
+fn vexc_infix_rbp(op) {
+    if op == 20 or op == 21 { return 101 }
+    if op == 18 or op == 19 { return 91 }
+    if op == 22 or op == 23 { return 81 }
+    return 0
+}
+
+fn vexc_prefix_expr(toks, pos) {
+    let k = vexc_tok_kind(toks, pos)
+
+    if k == 2 {
+        let txt = vexc_tok_text(toks, pos)
+        let node = list_create()
+        list_push(node, 300)
+        list_push(node, vexc_parse_int(txt))
+        return vexc_pair(node, pos + 1)
+    }
+
+    if k == 1 {
+        let name = vexc_tok_text(toks, pos)
+        let node = list_create()
+        list_push(node, 302)
+        list_push(node, name)
+        return vexc_pair(node, pos + 1)
+    }
+
+    if k == 11 {
+        let r = vexc_parse_expr_bp(toks, pos + 1, 0)
+        let expr = vexc_pair_node(r)
+        let pos = vexc_pair_pos(r)
+        if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        return vexc_pair(expr, pos)
+    }
+
+    let node = list_create()
+    list_push(node, 302)
+    list_push(node, "")
+    return vexc_pair(node, pos + 1)
+}
+
+fn vexc_parse_expr_bp(toks, pos, min_bp) {
+    let r = vexc_prefix_expr(toks, pos)
+    let lhs = vexc_pair_node(r)
+    let pos = vexc_pair_pos(r)
+
+    // call postfix: name(args...)
+    while vexc_tok_kind(toks, pos) == 11 {
+        if list_get(lhs, 0) != 302 { break }
+        let name = list_get(lhs, 1)
+
+        let pos = pos + 1 // '('
+        let args = list_create()
+        while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
+            let r2 = vexc_parse_expr_bp(toks, pos, 0)
+            list_push(args, vexc_pair_node(r2))
+            let pos = vexc_pair_pos(r2)
+        }
+        if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+
+        let node = list_create()
+        list_push(node, 304)
+        list_push(node, name)
+        list_push(node, args)
+        let lhs = node
+    }
+
+    while 1 {
+        let op = vexc_tok_kind(toks, pos)
+        let l_bp = vexc_infix_lbp(op)
+        if l_bp == 0 { break }
+        if l_bp < min_bp { break }
+
+        let r_bp = vexc_infix_rbp(op)
+        let r2 = vexc_parse_expr_bp(toks, pos + 1, r_bp)
+        let rhs = vexc_pair_node(r2)
+        let pos = vexc_pair_pos(r2)
+
+        let node = list_create()
+        list_push(node, 303)
+        list_push(node, op)
+        list_push(node, lhs)
+        list_push(node, rhs)
+        let lhs = node
+    }
+
+    return vexc_pair(lhs, pos)
+}
+
+fn vexc_parse_expr(toks, pos) { return vexc_parse_expr_bp(toks, pos, 0) }
+
+fn vexc_op_name(op) {
+    if op == 18 { return "+" }
+    if op == 19 { return "-" }
+    if op == 20 { return "*" }
+    if op == 21 { return "/" }
+    if op == 22 { return "<" }
+    if op == 23 { return "<=" }
+    return "?"
+}
+
+fn vexc_dump_expr(expr, depth, max_depth) {
+    if depth > max_depth { return }
+
+    let tag = list_get(expr, 0)
+
+    if tag == 300 {
+        let v = list_get(expr, 1)
+        print("Int ")
+        print(v)
+        print("\n")
+        return
+    }
+
+    if tag == 302 {
+        let name = list_get(expr, 1)
+        print("Name ")
+        print(name)
+        print("\n")
+        return
+    }
+
+    if tag == 304 {
+        let callee = list_get(expr, 1)
+        let args = list_get(expr, 2)
+        print("Call ")
+        print(callee)
+        print(" argc=")
+        print(list_len(args))
+        print("\n")
+        let i = 0
+        while i < list_len(args) {
+            vexc_dump_expr(list_get(args, i), depth + 1, max_depth)
+            let i = i + 1
+        }
+        return
+    }
+
+    if tag == 303 {
+        let op = list_get(expr, 1)
+        print("Bin ")
+        print(vexc_op_name(op))
+        print("\n")
+        vexc_dump_expr(list_get(expr, 2), depth + 1, max_depth)
+        vexc_dump_expr(list_get(expr, 3), depth + 1, max_depth)
+        return
+    }
+
+    print("UnknownExpr tag={tag}\n")
+}
+
+fn vexc_eval_expr(expr) {
+    let tag = list_get(expr, 0)
+
+    if tag == 300 { return list_get(expr, 1) }
+
+    if tag == 303 {
+        let op = list_get(expr, 1)
+        let left = vexc_eval_expr(list_get(expr, 2))
+        let right = vexc_eval_expr(list_get(expr, 3))
+        if op == 18 { return left + right }
+        if op == 19 { return left - right }
+        if op == 20 { return left * right }
+        if op == 21 { return left / right }
+        if op == 22 {
+            if left < right { return 1 }
+            return 0
+        }
+        if op == 23 {
+            if left <= right { return 1 }
+            return 0
+        }
+        return 0
+    }
+
+    // name/call: not evaluated yet in this tiny demo
+    return 0
+}

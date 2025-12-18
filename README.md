@@ -6,6 +6,7 @@ This repo currently contains:
 - a Zig-based bootstrap interpreter (`bootstrap/main.zig`)
 - a Vex-written "core compiler" (`src/compiler_core.vex`) that can tokenize/parse/eval Core Vex and compile it to bytecode (`.vbc`)
 - small Vex modules under `src/core/` (pulled in via `use`)
+- experimental "real compiler" ports under `src/vexc/` (starting with tokenizer + Pratt expr parsing)
 
 **Current status**: early bootstrap (rapidly changing).
 
@@ -28,6 +29,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Run saved bytecode (no Vex parsing): `zig build run -- runbc hello.vbc`
 - Optional stage2 (faster compiler commands): `zig build run -- bcsave src/compiler_core.vex compiler_core.vbc` (freshness includes `use` deps)
 - Imports (top-level): `use "./file.vex"` (demo: `zig build run -- examples/import_main.vex` or `zig build run -- eval examples/import_main.vex`)
+- Pratt expr parser demo (ported from `src/compiler.vex` ideas): `zig build run -- eval examples/vexc_expr_demo.vex`
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`

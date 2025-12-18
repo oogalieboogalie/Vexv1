@@ -1,0 +1,135 @@
+// src/vexc/tokenize.vex
+// Core-Vex port of the `compiler.vex` tokenizer idea (minimal subset for now).
+//
+// Token list format: flat pairs [kind,text, kind,text, ... , Eof,""].
+// Kind values match `src/core/lex.vex` / `src/compiler_core.vex`.
+
+fn vexc_consume_digits(src, i) {
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        if c < 48 { return i }
+        if c < 58 { let i = i + 1 }
+        if 57 < c { return i }
+    }
+    return i
+}
+
+fn vexc_consume_ident(src, i) {
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        let ok = 0
+        if c == 95 { let ok = 1 }
+        if ok == 0 and 47 < c and c < 58 { let ok = 1 }
+        if ok == 0 and 64 < c and c < 91 { let ok = 1 }
+        if ok == 0 and 96 < c and c < 123 { let ok = 1 }
+        if ok == 0 { return i }
+        let i = i + 1
+    }
+    return i
+}
+
+fn vexc_skip_line_comment(src, i) {
+    while i < str_len(src) {
+        if str_char(src, i) == 10 { return i + 1 }
+        let i = i + 1
+    }
+    return i
+}
+
+fn vexc_kind_name(k) {
+    if k == 0 { return "Eof" }
+    if k == 1 { return "Ident" }
+    if k == 2 { return "Int" }
+    if k == 11 { return "LParen" }
+    if k == 12 { return "RParen" }
+    if k == 18 { return "Plus" }
+    if k == 19 { return "Minus" }
+    if k == 20 { return "Star" }
+    if k == 21 { return "Slash" }
+    if k == 22 { return "Less" }
+    if k == 23 { return "LessEq" }
+    return "Unknown"
+}
+
+fn vexc_dump_tokens(toks, max) {
+    let limit = list_len(toks)
+    let max_entries = max * 2
+    if max_entries < limit { let limit = max_entries }
+
+    let i = 0
+    while i < limit {
+        let k = list_get(toks, i)
+        let txt = list_get(toks, i + 1)
+        print("tok:{vexc_kind_name(k)}:{txt}\n")
+        let i = i + 2
+    }
+}
+
+fn vexc_tokenize(src) {
+    let toks = list_create()
+
+    let i = 0
+    let n = str_len(src)
+    while i < n {
+        let c = str_char(src, i)
+        let handled = 0
+
+        // whitespace (control + space)
+        if handled == 0 and c < 33 {
+            let i = i + 1
+            let handled = 1
+        }
+
+        // line comments: // ...
+        if handled == 0 and c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
+            let i = vexc_skip_line_comment(src, i + 2)
+            let handled = 1
+        }
+
+        // numbers
+        if handled == 0 and 47 < c and c < 58 {
+            let start = i
+            let i = vexc_consume_digits(src, i)
+            list_push(toks, 2)
+            list_push(toks, str_slice(src, start, i))
+            let handled = 1
+        }
+
+        // identifier
+        if handled == 0 and (c == 95 or (64 < c and c < 91) or (96 < c and c < 123)) {
+            let start = i
+            let i = vexc_consume_ident(src, i)
+            list_push(toks, 1)
+            list_push(toks, str_slice(src, start, i))
+            let handled = 1
+        }
+
+        // parens
+        if handled == 0 and c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; let handled = 1 }
+
+        // ops
+        if handled == 0 and c == 43 { list_push(toks, 18); list_push(toks, "+"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; let handled = 1 }
+
+        // < / <=
+        if handled == 0 and c == 60 {
+            let is_le = 0
+            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_le = 1 }
+            if is_le == 1 { list_push(toks, 23); list_push(toks, "<="); let i = i + 2 }
+            if is_le == 0 { list_push(toks, 22); list_push(toks, "<"); let i = i + 1 }
+            let handled = 1
+        }
+
+        // unknown char: skip
+        if handled == 0 { let i = i + 1 }
+    }
+
+    list_push(toks, 0)
+    list_push(toks, "")
+    return toks
+}

@@ -1,0 +1,23 @@
+use "../src/vexc/tokenize.vex"
+use "../src/vexc/pratt.vex"
+
+fn demo(src) {
+    print("src: {src}\n")
+    let toks = vexc_tokenize(src)
+    vexc_dump_tokens(toks, 80)
+    let r = vexc_parse_expr(toks, 0)
+    let expr = vexc_pair_node(r)
+    print("expr:\n")
+    vexc_dump_expr(expr, 0, 8)
+}
+
+fn main() {
+    demo("sum5(1, 2, 3, 4, 5) + 6 * 7")
+    demo("(1 + 2) * 3 <= 9")
+
+    let toks = vexc_tokenize("(1 + 2) * 3 <= 9")
+    let r = vexc_parse_expr(toks, 0)
+    let expr = vexc_pair_node(r)
+    let v = vexc_eval_expr(expr)
+    print("eval={v}\n")
+}
