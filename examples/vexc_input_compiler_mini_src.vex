@@ -1,0 +1,5 @@
+let x = 42;
+print("hi");
+let y = x - 1 * 2 / 3;
+print(x == 42);
+print(x != 0);

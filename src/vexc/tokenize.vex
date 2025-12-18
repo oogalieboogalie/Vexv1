@@ -4,8 +4,7 @@
 // Token list format: flat pairs [kind,text, kind,text, ... , Eof,""].
 // Kind values match `src/core/lex.vex` / `src/compiler_core.vex`.
 
-fn vexc_consume_digits(src, i) {
-    let n = str_len(src)
+fn vexc_consume_digits(src, i, n) {
     while i < n {
         let c = str_char(src, i)
         if c < 48 { return i }
@@ -15,8 +14,7 @@ fn vexc_consume_digits(src, i) {
     return i
 }
 
-fn vexc_consume_ident(src, i) {
-    let n = str_len(src)
+fn vexc_consume_ident(src, i, n) {
     while i < n {
         let c = str_char(src, i)
         let ok = 0
@@ -30,8 +28,8 @@ fn vexc_consume_ident(src, i) {
     return i
 }
 
-fn vexc_skip_line_comment(src, i) {
-    while i < str_len(src) {
+fn vexc_skip_line_comment(src, i, n) {
+    while i < n {
         if str_char(src, i) == 10 { return i + 1 }
         let i = i + 1
     }
@@ -49,6 +47,7 @@ fn vexc_kind_name(k) {
     if k == 7 { return "Return" }
     if k == 8 { return "If" }
     if k == 9 { return "While" }
+    if k == 10 { return "Accel" }
     if k == 11 { return "LParen" }
     if k == 12 { return "RParen" }
     if k == 13 { return "LBrace" }
@@ -63,6 +62,10 @@ fn vexc_kind_name(k) {
     if k == 21 { return "Slash" }
     if k == 22 { return "Less" }
     if k == 23 { return "LessEq" }
+    if k == 24 { return "And" }
+    if k == 25 { return "Or" }
+    if k == 26 { return "Greater" }
+    if k == 27 { return "GreaterEq" }
     if k == 28 { return "Else" }
     if k == 29 { return "Dot" }
     if k == 31 { return "True" }
@@ -100,22 +103,20 @@ fn vexc_tokenize(src) {
     let n = str_len(src)
     while i < n {
         let c = str_char(src, i)
-        let handled = 0
-
         // whitespace (control + space)
-        if handled == 0 and c < 33 {
+        if c < 33 {
             let i = i + 1
-            let handled = 1
+            continue
         }
 
         // line comments: // ...
-        if handled == 0 and c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
-            let i = vexc_skip_line_comment(src, i + 2)
-            let handled = 1
+        if c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
+            let i = vexc_skip_line_comment(src, i + 2, n)
+            continue
         }
 
         // strings: " ... "
-        if handled == 0 and c == 34 {
+        if c == 34 {
             let start = i
             let i = i + 1
             while i < n and str_char(src, i) != 34 {
@@ -124,32 +125,34 @@ fn vexc_tokenize(src) {
             if i < n { let i = i + 1 }
             list_push(toks, 3)
             list_push(toks, str_slice(src, start, i))
-            let handled = 1
+            continue
         }
 
         // numbers
-        if handled == 0 and 47 < c and c < 58 {
+        if 47 < c and c < 58 {
             let start = i
-            let i = vexc_consume_digits(src, i)
+            let i = vexc_consume_digits(src, i, n)
             list_push(toks, 2)
             list_push(toks, str_slice(src, start, i))
-            let handled = 1
+            continue
         }
 
         // identifier
-        if handled == 0 and (c == 95 or (64 < c and c < 91) or (96 < c and c < 123)) {
+        if c == 95 or (64 < c and c < 91) or (96 < c and c < 123) {
             let start = i
-            let i = vexc_consume_ident(src, i)
+            let i = vexc_consume_ident(src, i, n)
             let len = i - start
 
             let kind = 1
             if len == 2 {
                 if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 110 { let kind = 6 } // fn
                 if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 102 { let kind = 8 } // if
+                if str_char(src, start + 0) == 111 and str_char(src, start + 1) == 114 { let kind = 25 } // or
                 if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 110 { let kind = 35 } // in
             }
             if kind == 1 and len == 3 {
                 if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 110 and str_char(src, start + 2) == 100 { let kind = 24 } // and
                 if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 114 { let kind = 34 } // for
                 if str_char(src, start + 0) == 117 and str_char(src, start + 1) == 115 and str_char(src, start + 2) == 101 { let kind = 41 } // use
             }
@@ -164,6 +167,7 @@ fn vexc_tokenize(src) {
             if kind == 1 and len == 5 {
                 if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
                 if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
                 if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 97 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 115 and str_char(src, start + 4) == 101 { let kind = 32 } // false
                 if str_char(src, start + 0) == 98 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 101 and str_char(src, start + 3) == 97 and str_char(src, start + 4) == 107 { let kind = 39 } // break
             }
@@ -173,75 +177,102 @@ fn vexc_tokenize(src) {
 
             list_push(toks, kind)
             list_push(toks, str_slice(src, start, i))
-            let handled = 1
+            continue
         }
 
         // parens
-        if handled == 0 and c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; let handled = 1 }
+        if c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; continue }
+        if c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; continue }
 
         // braces
-        if handled == 0 and c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; let handled = 1 }
+        if c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; continue }
+        if c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; continue }
 
         // brackets
-        if handled == 0 and c == 91 { list_push(toks, 37); list_push(toks, "["); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 93 { list_push(toks, 38); list_push(toks, "]"); let i = i + 1; let handled = 1 }
+        if c == 91 { list_push(toks, 37); list_push(toks, "["); let i = i + 1; continue }
+        if c == 93 { list_push(toks, 38); list_push(toks, "]"); let i = i + 1; continue }
 
         // ..
-        if handled == 0 and c == 46 and (i + 1) < n and str_char(src, i + 1) == 46 {
+        if c == 46 and (i + 1) < n and str_char(src, i + 1) == 46 {
             list_push(toks, 36)
             list_push(toks, "..")
             let i = i + 2
-            let handled = 1
+            continue
         }
 
         // .
-        if handled == 0 and c == 46 {
+        if c == 46 {
             list_push(toks, 29)
             list_push(toks, ".")
             let i = i + 1
-            let handled = 1
+            continue
         }
 
         // ops
-        if handled == 0 and c == 43 {
-            let is_peq = 0
-            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_peq = 1 }
-            if is_peq == 1 { list_push(toks, 30); list_push(toks, "+="); let i = i + 2 }
-            if is_peq == 0 { list_push(toks, 18); list_push(toks, "+"); let i = i + 1 }
-            let handled = 1
-        }
-        if handled == 0 and c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; let handled = 1 }
-        if handled == 0 and c == 61 {
-            let is_eqeq = 0
-            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_eqeq = 1 }
-            if is_eqeq == 1 { list_push(toks, 16); list_push(toks, "=="); let i = i + 2 }
-            if is_eqeq == 0 { list_push(toks, 15); list_push(toks, "="); let i = i + 1 }
-            let handled = 1
-        }
-        if handled == 0 and c == 33 {
+        if c == 43 {
             if (i + 1) < n and str_char(src, i + 1) == 61 {
-                list_push(toks, 17)
-                list_push(toks, "!=")
+                list_push(toks, 30)
+                list_push(toks, "+=")
                 let i = i + 2
-                let handled = 1
+                continue
             }
+            list_push(toks, 18)
+            list_push(toks, "+")
+            let i = i + 1
+            continue
+        }
+        if c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; continue }
+        if c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; continue }
+        if c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; continue }
+        if c == 61 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                list_push(toks, 16)
+                list_push(toks, "==")
+                let i = i + 2
+                continue
+            }
+            list_push(toks, 15)
+            list_push(toks, "=")
+            let i = i + 1
+            continue
+        }
+        if c == 33 and (i + 1) < n and str_char(src, i + 1) == 61 {
+            list_push(toks, 17)
+            list_push(toks, "!=")
+            let i = i + 2
+            continue
         }
 
         // < / <=
-        if handled == 0 and c == 60 {
-            let is_le = 0
-            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_le = 1 }
-            if is_le == 1 { list_push(toks, 23); list_push(toks, "<="); let i = i + 2 }
-            if is_le == 0 { list_push(toks, 22); list_push(toks, "<"); let i = i + 1 }
-            let handled = 1
+        if c == 60 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                list_push(toks, 23)
+                list_push(toks, "<=")
+                let i = i + 2
+                continue
+            }
+            list_push(toks, 22)
+            list_push(toks, "<")
+            let i = i + 1
+            continue
+        }
+
+        // > / >=
+        if c == 62 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                list_push(toks, 27)
+                list_push(toks, ">=")
+                let i = i + 2
+                continue
+            }
+            list_push(toks, 26)
+            list_push(toks, ">")
+            let i = i + 1
+            continue
         }
 
         // unknown char: skip
-        if handled == 0 { let i = i + 1 }
+        let i = i + 1
     }
 
     list_push(toks, 0)

@@ -1,0 +1,227 @@
+// src/vexc/compiler_mini.vex
+// Core-Vex port of the early mini tokenizer in src/compiler.vex.
+
+fn mini_token_list_init() { return list_create() }
+
+fn mini_token_list_push(list, kind, text) {
+    let t = list_create()
+    list_push(t, kind)
+    list_push(t, text)
+    list_push(list, t)
+    return 0
+}
+
+fn mini_token_list_finish(list) { return list }
+
+fn token_kind_to_string(k) {
+    if k == 4 { return "Let" }
+    if k == 5 { return "Print" }
+    if k == 1 { return "Ident" }
+    if k == 2 { return "Int" }
+    if k == 3 { return "String" }
+    if k == 15 { return "Equal" }
+    if k == 16 { return "EqEq" }
+    if k == 17 { return "BangEq" }
+    if k == 18 { return "Plus" }
+    if k == 19 { return "Minus" }
+    if k == 20 { return "Star" }
+    if k == 21 { return "Slash" }
+    if k == 11 { return "LParen" }
+    if k == 12 { return "RParen" }
+    if k == 42 { return "Semicolon" }
+    if k == 0 { return "Eof" }
+    return "Unknown"
+}
+
+fn is_space(c) {
+    if c == 32 { return 1 }
+    if c == 9 { return 1 }
+    if c == 13 { return 1 }
+    if c == 10 { return 1 }
+    return 0
+}
+
+fn is_alpha(c) {
+    if 96 < c and c < 123 { return 1 }
+    if 64 < c and c < 91 { return 1 }
+    if c == 95 { return 1 }
+    return 0
+}
+
+fn is_digit(c) {
+    if 47 < c and c < 58 { return 1 }
+    return 0
+}
+
+fn is_kw_let(s) {
+    if str_len(s) != 3 { return 0 }
+    if str_char(s, 0) != 108 { return 0 }
+    if str_char(s, 1) != 101 { return 0 }
+    if str_char(s, 2) != 116 { return 0 }
+    return 1
+}
+
+fn is_kw_print(s) {
+    if str_len(s) != 5 { return 0 }
+    if str_char(s, 0) != 112 { return 0 }
+    if str_char(s, 1) != 114 { return 0 }
+    if str_char(s, 2) != 105 { return 0 }
+    if str_char(s, 3) != 110 { return 0 }
+    if str_char(s, 4) != 116 { return 0 }
+    return 1
+}
+
+fn vex_consume_ident(src, i, n) {
+    while i < n {
+        let c = str_char(src, i)
+        if is_alpha(c) or is_digit(c) {
+            let i = i + 1
+            continue
+        }
+        return i
+    }
+    return i
+}
+
+fn vex_consume_digits(src, i, n) {
+    while i < n {
+        let c = str_char(src, i)
+        if is_digit(c) {
+            let i = i + 1
+            continue
+        }
+        return i
+    }
+    return i
+}
+
+fn vex_skip_line_comment(src, i, n) {
+    while i < n {
+        if str_char(src, i) == 10 { return i + 1 }
+        let i = i + 1
+    }
+    return i
+}
+
+fn vex_tokenize(src) {
+    let tokens = mini_token_list_init()
+    let i = 0
+    let n = str_len(src)
+
+    while i < n {
+        let c = str_char(src, i)
+
+        if is_space(c) {
+            let i = i + 1
+            continue
+        }
+
+        if c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
+            let i = vex_skip_line_comment(src, i + 2, n)
+            continue
+        }
+
+        if c == 34 {
+            let start = i
+            let i = i + 1
+            while i < n and str_char(src, i) != 34 {
+                let i = i + 1
+            }
+            if i < n { let i = i + 1 }
+            mini_token_list_push(tokens, 3, str_slice(src, start, i))
+            continue
+        }
+
+        if is_alpha(c) or (c == 95) {
+            let start = i
+            let i = vex_consume_ident(src, i, n)
+            let text = str_slice(src, start, i)
+            let kind = 1
+            if is_kw_let(text) { let kind = 4 }
+            if kind == 1 and is_kw_print(text) { let kind = 5 }
+            mini_token_list_push(tokens, kind, text)
+            continue
+        }
+
+        if is_digit(c) {
+            let start = i
+            let i = vex_consume_digits(src, i, n)
+            let text = str_slice(src, start, i)
+            mini_token_list_push(tokens, 2, text)
+            continue
+        }
+
+        if c == 59 {
+            mini_token_list_push(tokens, 42, ";")
+            let i = i + 1
+            continue
+        }
+
+        if c == 43 {
+            mini_token_list_push(tokens, 18, "+")
+            let i = i + 1
+            continue
+        }
+        if c == 45 {
+            mini_token_list_push(tokens, 19, "-")
+            let i = i + 1
+            continue
+        }
+        if c == 42 {
+            mini_token_list_push(tokens, 20, "*")
+            let i = i + 1
+            continue
+        }
+        if c == 47 {
+            mini_token_list_push(tokens, 21, "/")
+            let i = i + 1
+            continue
+        }
+        if c == 40 {
+            mini_token_list_push(tokens, 11, "(")
+            let i = i + 1
+            continue
+        }
+        if c == 41 {
+            mini_token_list_push(tokens, 12, ")")
+            let i = i + 1
+            continue
+        }
+        if c == 61 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                mini_token_list_push(tokens, 16, "==")
+                let i = i + 2
+                continue
+            }
+            mini_token_list_push(tokens, 15, "=")
+            let i = i + 1
+            continue
+        }
+        if c == 33 and (i + 1) < n and str_char(src, i + 1) == 61 {
+            mini_token_list_push(tokens, 17, "!=")
+            let i = i + 2
+            continue
+        }
+
+        print("[vexc] error: unexpected char in vex_tokenize\n")
+        let i = i + 1
+    }
+
+    mini_token_list_push(tokens, 0, "")
+    return mini_token_list_finish(tokens)
+}
+
+fn debug_tokens() {
+    let src = read_file("examples/vexc_input_compiler_mini_src.vex")
+    let toks = vex_tokenize(src)
+    print("vex_tokenize:\n")
+    let idx = 0
+    while idx < list_len(toks) {
+        let t = list_get(toks, idx)
+        let kind = list_get(t, 0)
+        let text = list_get(t, 1)
+        print("tok:{token_kind_to_string(kind)}:{text}\n")
+        let idx = idx + 1
+    }
+    return 0
+}

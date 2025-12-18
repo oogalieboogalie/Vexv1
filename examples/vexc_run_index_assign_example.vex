@@ -2,7 +2,8 @@ use "../src/vexc/eval.vex"
 
 fn main() {
     print("[vexc] running examples/index_assign.vex\n")
-    let prog = vexc_parse_program_file("examples/index_assign.vex")
+    let token_cache = vexc_token_cache_create()
+    let prog = vexc_parse_program_file_cached("examples/index_assign.vex", token_cache)
     let v = vexc_eval_program(prog)
     print("\n[vexc] returned {v}\n")
 }

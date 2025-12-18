@@ -38,6 +38,12 @@ This is where we left off and where to go next.
   - Implements `vex_parse_body` and `vex_parse` to build a function-level AST (functions + statement lists).
   - Sketches an evaluator: Vex `Env`, `eval_expr`, `eval_stmt`, `eval_block`, and `vex_eval(program)` that conceptually mirrors the Zig interpreter.
 
+- Vex-in-Vex (vexc) front-end path (`src/vexc/*`):
+  - Tokenizer/Pratt/stmt parser covers `> >=`, `and`/`or`, dot/indexing, and top-level `@accel` tags.
+  - Evaluator runs the existing demo suite with string interpolation (`{name}` + `{fn(arg)}`) and break/continue propagation.
+  - Token cache avoids re-tokenizing unchanged files across repeated parses (`vexc_parse_program_file_cached`).
+  - `src/vexc/compiler_mini.vex` ports the early `vex_tokenize` and now handles strings and `- * / == != ;` (demo: `examples/vexc_input_compiler_mini_src.vex`).
+
 ## Near-Term Goals
 
 1. Align semantics
@@ -75,10 +81,19 @@ This is where we left off and where to go next.
       - `examples/vexc_stmt_demo.vex`
       - `examples/vexc_run_file_demo.vex` (parses + runs `examples/vexc_input_sum.vex`)
         - Also runs `examples/vexc_input_break_continue.vex`, `examples/vexc_input_builtins.vex`, and `examples/vexc_input_strings.vex`.
+        - Also runs `examples/vexc_input_logic.vex` (comparisons + and/or).
       - `examples/vexc_run_for_index_example.vex` (runs `examples/for_index.vex` under vexc; exercises `for`, `xs[i]`, and string interpolation)
       - `examples/vexc_run_index_assign_example.vex` (runs `examples/index_assign.vex` under vexc; exercises `xs[i] = v` / `xs[i] += v`)
       - `examples/vexc_run_dot_example.vex` (runs `examples/dot.vex` under vexc; exercises `.name` and `obj.field`)
       - `examples/vexc_run_import_example.vex` (runs `examples/import_main.vex` under vexc; exercises top-level `use "./file.vex"` imports)
+   - (Added) `src/vexc/compiler_mini.vex` + `examples/vexc_run_compiler_mini.vex` to run the early `vex_tokenize` under vexc.
+
+## How Close Are We To A "Nice" Language?
+
+- Core language features are in place in the bootstrap interpreter, and the vexc path now runs multiple real examples end-to-end.
+- The self-hosting story is real but still narrow: tokens/parsing/eval exist in vexc, yet large parts of `compiler.vex` remain to be pulled through.
+- Biggest gaps to feel "nice": richer error messages/locations, a stable module/package story, a fuller stdlib, and tooling (formatter/tests).
+- Performance is usable for demos but still needs caching, faster tokenization, and tighter runtime paths to feel snappy.
 
 ## Medium-Term Goals
 

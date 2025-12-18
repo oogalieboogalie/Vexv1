@@ -56,16 +56,20 @@ fn vexc_strip_quotes(s) {
 fn vexc_infix_lbp(op) {
     if op == 20 or op == 21 { return 100 }
     if op == 18 or op == 19 { return 90 }
-    if op == 22 or op == 23 { return 80 }
+    if op == 22 or op == 23 or op == 26 or op == 27 { return 80 }
     if op == 16 or op == 17 { return 70 }
+    if op == 24 { return 60 }
+    if op == 25 { return 50 }
     return 0
 }
 
 fn vexc_infix_rbp(op) {
     if op == 20 or op == 21 { return 101 }
     if op == 18 or op == 19 { return 91 }
-    if op == 22 or op == 23 { return 81 }
+    if op == 22 or op == 23 or op == 26 or op == 27 { return 81 }
     if op == 16 or op == 17 { return 71 }
+    if op == 24 { return 61 }
+    if op == 25 { return 51 }
     return 0
 }
 
@@ -248,8 +252,12 @@ fn vexc_op_name(op) {
     if op == 21 { return "/" }
     if op == 22 { return "<" }
     if op == 23 { return "<=" }
+    if op == 26 { return ">" }
+    if op == 27 { return ">=" }
     if op == 16 { return "==" }
     if op == 17 { return "!=" }
+    if op == 24 { return "and" }
+    if op == 25 { return "or" }
     return "?"
 }
 

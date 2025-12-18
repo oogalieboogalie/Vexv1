@@ -24,7 +24,26 @@ fn vexc_is_ident_char(c) {
     return ok
 }
 
-fn vexc_render_string(vals_env, defs_env, raw) {
+fn vexc_is_digit_char(c) {
+    if 47 < c and c < 58 { return 1 }
+    return 0
+}
+
+fn vexc_parse_int(s) {
+    let v = 0
+    let i = 0
+    let n = str_len(s)
+    while i < n {
+        let c = str_char(s, i)
+        if c < 48 { return v }
+        if 57 < c { return v }
+        let v = v * 10 + (c - 48)
+        let i = i + 1
+    }
+    return v
+}
+
+fn vexc_render_string(funcs_env, vals_env, defs_env, raw) {
     let i = 0
     let n = str_len(raw)
     while i < n {
@@ -44,15 +63,60 @@ fn vexc_render_string(vals_env, defs_env, raw) {
                 while k < elen and vexc_is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
                 let name = str_slice(expr, start_name, k)
 
-                let def = env_find(defs_env, name)
-                if def != 0 {
-                    let v = env_find(vals_env, name)
+                while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+                let did_call = 0
+
+                // func call: {name(16)} or {name(x)}
+                if k < elen and str_char(expr, k) == 40 {
+                    let did_call = 1
+                    let k = k + 1
+                    while k < elen and (str_char(expr, k) == 32 or str_char(expr, k) == 9) { let k = k + 1 }
+
+                    let arg_expr = 0
+                    let parsed_num = 0
+
+                    if k < elen and vexc_is_digit_char(str_char(expr, k)) != 0 {
+                        let start = k
+                        while k < elen and vexc_is_digit_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_expr = list_create()
+                        list_push(arg_expr, 300)
+                        list_push(arg_expr, vexc_parse_int(str_slice(expr, start, k)))
+                        let parsed_num = 1
+                    }
+
+                    if parsed_num == 0 {
+                        let start = k
+                        while k < elen and vexc_is_ident_char(str_char(expr, k)) != 0 { let k = k + 1 }
+                        let arg_name = str_slice(expr, start, k)
+                        let arg_expr = list_create()
+                        list_push(arg_expr, 302)
+                        list_push(arg_expr, arg_name)
+                    }
+
+                    // Skip until closing ')'
+                    while k < elen and str_char(expr, k) != 41 { let k = k + 1 }
+
+                    let args = list_create()
+                    if arg_expr != 0 { list_push(args, arg_expr) }
+
+                    let call_node = list_create()
+                    list_push(call_node, 304)
+                    list_push(call_node, name)
+                    list_push(call_node, args)
+                    let v = vexc_eval_expr(call_node, funcs_env, vals_env, defs_env)
                     print(v)
                 }
-                if def == 0 {
-                    print_char(123)
-                    print_bytes(name)
-                    print_char(125)
+
+                // variable: {x}
+                if did_call == 0 {
+                    let def = env_find(defs_env, name)
+                    if def != 0 {
+                        let v = env_find(vals_env, name)
+                        print(v)
+                    }
+                    if def == 0 {
+                        print("[vexc] error: undefined var {name}\n")
+                    }
                 }
 
                 let i = j + 1
@@ -116,12 +180,28 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env) {
             if left <= right { return 1 }
             return 0
         }
+        if op == 26 {
+            if left > right { return 1 }
+            return 0
+        }
+        if op == 27 {
+            if left >= right { return 1 }
+            return 0
+        }
         if op == 16 {
             if left == right { return 1 }
             return 0
         }
         if op == 17 {
             if left != right { return 1 }
+            return 0
+        }
+        if op == 24 {
+            if left != 0 and right != 0 { return 1 }
+            return 0
+        }
+        if op == 25 {
+            if left != 0 or right != 0 { return 1 }
             return 0
         }
         return 0
@@ -239,7 +319,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env) {
     if tag == 201 {
         let expr = list_get(stmt, 1)
         if list_get(expr, 0) == 301 {
-            vexc_render_string(vals_env, defs_env, list_get(expr, 1))
+            vexc_render_string(funcs_env, vals_env, defs_env, list_get(expr, 1))
         }
         if list_get(expr, 0) != 301 {
             let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env)

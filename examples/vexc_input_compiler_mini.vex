@@ -1,0 +1,6 @@
+use "../src/vexc/compiler_mini.vex"
+
+fn main() {
+    debug_tokens()
+    return 0
+}

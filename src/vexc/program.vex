@@ -28,6 +28,39 @@ fn vexc_path_dirname(path) {
     return ""
 }
 
+fn vexc_str_eq(a, b) {
+    let n = str_len(a)
+    if n != str_len(b) { return 0 }
+    let i = 0
+    while i < n {
+        if str_char(a, i) != str_char(b, i) { return 0 }
+        let i = i + 1
+    }
+    return 1
+}
+
+fn vexc_token_cache_create() {
+    return env_create(0)
+}
+
+fn vexc_tokenize_cached(path, token_cache) {
+    let src = read_file(path)
+    let cached = env_find(token_cache, path)
+    if cached != 0 {
+        let cached_src = list_get(cached, 0)
+        if vexc_str_eq(cached_src, src) != 0 {
+            return list_get(cached, 1)
+        }
+    }
+
+    let toks = vexc_tokenize(src)
+    let entry = list_create()
+    list_push(entry, src)
+    list_push(entry, toks)
+    env_set(token_cache, path, entry)
+    return toks
+}
+
 fn vexc_parse_func(toks, pos, is_accel) {
     // consume 'fn'
     if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
@@ -73,7 +106,7 @@ fn vexc_parse_func(toks, pos, is_accel) {
     return vexc_pair(node, pos)
 }
 
-fn vexc_parse_program_with_imports(toks, path, imports_seen) {
+fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
     let funcs = list_create()
 
     let pos = 0
@@ -97,16 +130,18 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen) {
 
             if env_find(imports_seen, full_path) == 0 {
                 env_set(imports_seen, full_path, 1)
-                let src2 = read_file(full_path)
-                let toks2 = vexc_tokenize(src2)
-                let prog2 = vexc_parse_program_with_imports(toks2, full_path, imports_seen)
+                let toks2 = vexc_tokenize_cached(full_path, token_cache)
+                let prog2 = vexc_parse_program_with_imports(toks2, full_path, imports_seen, token_cache)
                 vexc_list_extend(funcs, list_get(prog2, 1))
             }
             continue
         }
 
-        // accel tag not wired yet; skip
         let is_accel = 0
+        if vexc_tok_kind(toks, pos) == 10 {
+            let is_accel = 1
+            let pos = pos + 1
+        }
 
         if vexc_tok_kind(toks, pos) == 6 {
             let fr = vexc_parse_func(toks, pos, is_accel)
@@ -127,13 +162,18 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen) {
 
 fn vexc_parse_program(toks, pos) {
     let imports_seen = env_create(0)
-    return vexc_parse_program_with_imports(toks, "", imports_seen)
+    let token_cache = vexc_token_cache_create()
+    return vexc_parse_program_with_imports(toks, "", imports_seen, token_cache)
+}
+
+fn vexc_parse_program_file_cached(path, token_cache) {
+    let imports_seen = env_create(0)
+    env_set(imports_seen, path, 1)
+    let toks = vexc_tokenize_cached(path, token_cache)
+    return vexc_parse_program_with_imports(toks, path, imports_seen, token_cache)
 }
 
 fn vexc_parse_program_file(path) {
-    let imports_seen = env_create(0)
-    env_set(imports_seen, path, 1)
-    let src = read_file(path)
-    let toks = vexc_tokenize(src)
-    return vexc_parse_program_with_imports(toks, path, imports_seen)
+    let token_cache = vexc_token_cache_create()
+    return vexc_parse_program_file_cached(path, token_cache)
 }
