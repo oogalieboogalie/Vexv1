@@ -1,0 +1,145 @@
+// src/vexc/stmt.vex
+// Core-Vex statement/block parser building the same list-AST tags as `compiler_core.vex`.
+//
+// Stmts:
+// - let    [200, name, expr]
+// - return [202, expr_or_0]
+// - if     [203, cond, then_block, else_block_or_0]
+// - expr   [205, expr]
+// Block:   [102, stmts]
+
+use "./pratt.vex"
+
+fn vexc_make_block(stmts) {
+    let b = list_create()
+    list_push(b, 102)
+    list_push(b, stmts)
+    return b
+}
+
+fn vexc_parse_block(toks, pos) {
+    let stmts = list_create()
+    if vexc_tok_kind(toks, pos) == 13 { let pos = pos + 1 }
+
+    while vexc_tok_kind(toks, pos) != 14 and vexc_tok_kind(toks, pos) != 0 {
+        let r = vexc_parse_stmt(toks, pos)
+        list_push(stmts, vexc_pair_node(r))
+        let pos = vexc_pair_pos(r)
+    }
+
+    if vexc_tok_kind(toks, pos) == 14 { let pos = pos + 1 }
+    return vexc_pair(vexc_make_block(stmts), pos)
+}
+
+fn vexc_parse_stmt(toks, pos) {
+    let k = vexc_tok_kind(toks, pos)
+
+    // let name = expr
+    if k == 4 {
+        let name = ""
+        if vexc_tok_kind(toks, pos + 1) == 1 { let name = vexc_tok_text(toks, pos + 1) }
+
+        let pos = pos + 1
+        if vexc_tok_kind(toks, pos) == 1 { let pos = pos + 1 }
+        while vexc_tok_kind(toks, pos) != 15 and vexc_tok_kind(toks, pos) != 0 { let pos = pos + 1 }
+        if vexc_tok_kind(toks, pos) == 15 { let pos = pos + 1 }
+
+        let r = vexc_parse_expr(toks, pos)
+        let expr = vexc_pair_node(r)
+        let pos = vexc_pair_pos(r)
+
+        let node = list_create()
+        list_push(node, 200)
+        list_push(node, name)
+        list_push(node, expr)
+        return vexc_pair(node, pos)
+    }
+
+    // return expr?
+    if k == 7 {
+        let pos = pos + 1
+        let expr = 0
+        let next = vexc_tok_kind(toks, pos)
+        if next != 14 and next != 0 {
+            let r = vexc_parse_expr(toks, pos)
+            let expr = vexc_pair_node(r)
+            let pos = vexc_pair_pos(r)
+        }
+
+        let node = list_create()
+        list_push(node, 202)
+        list_push(node, expr)
+        return vexc_pair(node, pos)
+    }
+
+    // if cond { ... } (else { ... })?
+    if k == 8 {
+        let pos = pos + 1
+        let r = vexc_parse_expr(toks, pos)
+        let cond = vexc_pair_node(r)
+        let pos = vexc_pair_pos(r)
+
+        let then_block = 0
+        let did_then = 0
+        if vexc_tok_kind(toks, pos) == 13 {
+            let br = vexc_parse_block(toks, pos)
+            let then_block = vexc_pair_node(br)
+            let pos = vexc_pair_pos(br)
+            let did_then = 1
+        }
+        if did_then == 0 {
+            let sr = vexc_parse_stmt(toks, pos)
+            let inner = vexc_pair_node(sr)
+            let pos = vexc_pair_pos(sr)
+            let stmts = list_create()
+            list_push(stmts, inner)
+            let then_block = vexc_make_block(stmts)
+        }
+
+        let else_block = 0
+        if vexc_tok_kind(toks, pos) == 28 {
+            let pos = pos + 1
+
+            let did_else = 0
+            if vexc_tok_kind(toks, pos) == 13 {
+                let br = vexc_parse_block(toks, pos)
+                let else_block = vexc_pair_node(br)
+                let pos = vexc_pair_pos(br)
+                let did_else = 1
+            }
+            if did_else == 0 {
+                let sr = vexc_parse_stmt(toks, pos)
+                let inner = vexc_pair_node(sr)
+                let pos = vexc_pair_pos(sr)
+                let stmts = list_create()
+                list_push(stmts, inner)
+                let else_block = vexc_make_block(stmts)
+            }
+        }
+
+        let node = list_create()
+        list_push(node, 203)
+        list_push(node, cond)
+        list_push(node, then_block)
+        list_push(node, else_block)
+        return vexc_pair(node, pos)
+    }
+
+    // { ... }
+    if k == 13 {
+        let br = vexc_parse_block(toks, pos)
+        let block = vexc_pair_node(br)
+        let pos = vexc_pair_pos(br)
+        return vexc_pair(block, pos)
+    }
+
+    // Fallback: expression statement.
+    let r = vexc_parse_expr(toks, pos)
+    let expr = vexc_pair_node(r)
+    let pos = vexc_pair_pos(r)
+
+    let node = list_create()
+    list_push(node, 205)
+    list_push(node, expr)
+    return vexc_pair(node, pos)
+}

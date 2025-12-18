@@ -70,7 +70,9 @@ This is where we left off and where to go next.
 5. Execute a subset of `compiler.vex` under the interpreter
    - Pick a small, self-contained chunk of `compiler.vex` (e.g., `vex_tokenize` or a tiny `vex_eval` for expressions).
    - Port it fully into Core Vex and run it with the interpreter as a proof of concept.
-   - (Started) `src/vexc/tokenize.vex` + `src/vexc/pratt.vex` with demo `examples/vexc_expr_demo.vex`.
+   - (Started) `src/vexc/tokenize.vex` + `src/vexc/pratt.vex` + `src/vexc/stmt.vex` + `src/vexc/eval.vex` with demos:
+     - `examples/vexc_expr_demo.vex`
+     - `examples/vexc_stmt_demo.vex`
 
 ## Medium-Term Goals
 

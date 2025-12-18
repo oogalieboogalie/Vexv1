@@ -42,14 +42,21 @@ fn vexc_kind_name(k) {
     if k == 0 { return "Eof" }
     if k == 1 { return "Ident" }
     if k == 2 { return "Int" }
+    if k == 4 { return "Let" }
+    if k == 7 { return "Return" }
+    if k == 8 { return "If" }
     if k == 11 { return "LParen" }
     if k == 12 { return "RParen" }
+    if k == 13 { return "LBrace" }
+    if k == 14 { return "RBrace" }
+    if k == 15 { return "Equal" }
     if k == 18 { return "Plus" }
     if k == 19 { return "Minus" }
     if k == 20 { return "Star" }
     if k == 21 { return "Slash" }
     if k == 22 { return "Less" }
     if k == 23 { return "LessEq" }
+    if k == 28 { return "Else" }
     return "Unknown"
 }
 
@@ -101,7 +108,23 @@ fn vexc_tokenize(src) {
         if handled == 0 and (c == 95 or (64 < c and c < 91) or (96 < c and c < 123)) {
             let start = i
             let i = vexc_consume_ident(src, i)
-            list_push(toks, 1)
+            let len = i - start
+
+            let kind = 1
+            if len == 2 {
+                if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 102 { let kind = 8 } // if
+            }
+            if kind == 1 and len == 3 {
+                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
+            }
+            if kind == 1 and len == 4 {
+                if str_char(src, start + 0) == 101 and str_char(src, start + 1) == 108 and str_char(src, start + 2) == 115 and str_char(src, start + 3) == 101 { let kind = 28 } // else
+            }
+            if kind == 1 and len == 6 {
+                if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
+            }
+
+            list_push(toks, kind)
             list_push(toks, str_slice(src, start, i))
             let handled = 1
         }
@@ -110,11 +133,16 @@ fn vexc_tokenize(src) {
         if handled == 0 and c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; let handled = 1 }
 
+        // braces
+        if handled == 0 and c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; let handled = 1 }
+
         // ops
         if handled == 0 and c == 43 { list_push(toks, 18); list_push(toks, "+"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; let handled = 1 }
         if handled == 0 and c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; let handled = 1 }
+        if handled == 0 and c == 61 { list_push(toks, 15); list_push(toks, "="); let i = i + 1; let handled = 1 }
 
         // < / <=
         if handled == 0 and c == 60 {

@@ -1,0 +1,114 @@
+// src/vexc/eval.vex
+// Tiny evaluator for the list-AST emitted by `src/vexc/stmt.vex`.
+
+use "./stmt.vex"
+
+fn vexc_res(has_value, value) {
+    let r = list_create()
+    list_push(r, has_value)
+    list_push(r, value)
+    return r
+}
+
+fn vexc_res_has(r) { return list_get(r, 0) }
+fn vexc_res_val(r) { return list_get(r, 1) }
+
+fn vexc_env_get(vals_env, defs_env, name) {
+    let def = env_find(defs_env, name)
+    if def == 0 {
+        print("[vexc] error: undefined var {name}\n")
+        return 0
+    }
+    return env_find(vals_env, name)
+}
+
+fn vexc_eval_expr(expr, vals_env, defs_env) {
+    let tag = list_get(expr, 0)
+
+    if tag == 300 { return list_get(expr, 1) }
+
+    if tag == 302 {
+        let name = list_get(expr, 1)
+        return vexc_env_get(vals_env, defs_env, name)
+    }
+
+    if tag == 303 {
+        let op = list_get(expr, 1)
+        let left = vexc_eval_expr(list_get(expr, 2), vals_env, defs_env)
+        let right = vexc_eval_expr(list_get(expr, 3), vals_env, defs_env)
+        if op == 18 { return left + right }
+        if op == 19 { return left - right }
+        if op == 20 { return left * right }
+        if op == 21 { return left / right }
+        if op == 22 {
+            if left < right { return 1 }
+            return 0
+        }
+        if op == 23 {
+            if left <= right { return 1 }
+            return 0
+        }
+        return 0
+    }
+
+    if tag == 304 {
+        print("[vexc] error: call not supported yet\n")
+        return 0
+    }
+
+    return 0
+}
+
+fn vexc_eval_stmt(stmt, vals_env, defs_env) {
+    let tag = list_get(stmt, 0)
+
+    if tag == 102 {
+        return vexc_eval_block(stmt, vals_env, defs_env)
+    }
+
+    if tag == 200 {
+        let name = list_get(stmt, 1)
+        let expr = list_get(stmt, 2)
+        let v = vexc_eval_expr(expr, vals_env, defs_env)
+        env_set(vals_env, name, v)
+        env_set(defs_env, name, 1)
+        return vexc_res(0, 0)
+    }
+
+    if tag == 202 {
+        let expr = list_get(stmt, 1)
+        let v = 0
+        if expr != 0 { let v = vexc_eval_expr(expr, vals_env, defs_env) }
+        return vexc_res(1, v)
+    }
+
+    if tag == 203 {
+        let cond = list_get(stmt, 1)
+        let then_block = list_get(stmt, 2)
+        let else_block = list_get(stmt, 3)
+        let c = vexc_eval_expr(cond, vals_env, defs_env)
+        if c != 0 { return vexc_eval_block(then_block, vals_env, defs_env) }
+        if else_block != 0 { return vexc_eval_block(else_block, vals_env, defs_env) }
+        return vexc_res(0, 0)
+    }
+
+    if tag == 205 {
+        let expr = list_get(stmt, 1)
+        _ = vexc_eval_expr(expr, vals_env, defs_env)
+        return vexc_res(0, 0)
+    }
+
+    print("[vexc] error: unsupported stmt tag\n")
+    return vexc_res(0, 0)
+}
+
+fn vexc_eval_block(block, vals_env, defs_env) {
+    let stmts = list_get(block, 1)
+    let i = 0
+    while i < list_len(stmts) {
+        let r = vexc_eval_stmt(list_get(stmts, i), vals_env, defs_env)
+        if vexc_res_has(r) != 0 { return r }
+        let i = i + 1
+    }
+    return vexc_res(0, 0)
+}

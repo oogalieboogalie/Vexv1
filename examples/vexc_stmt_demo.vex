@@ -1,0 +1,31 @@
+use "../src/vexc/tokenize.vex"
+use "../src/vexc/stmt.vex"
+use "../src/vexc/eval.vex"
+
+fn main() {
+    let src = "{
+  let x = (1 + 2) * 3
+  if x <= 9 {
+    return x
+  } else {
+    return 0
+  }
+}
+"
+
+    print("src:\n")
+    print_bytes(src)
+    print("\n")
+
+    let toks = vexc_tokenize(src)
+    vexc_dump_tokens(toks, 200)
+
+    let br = vexc_parse_block(toks, 0)
+    let block = vexc_pair_node(br)
+
+    let vals = env_create()
+    let defs = env_create()
+    let r = vexc_eval_block(block, vals, defs)
+    let v = vexc_res_val(r)
+    print("eval_return={v}\n")
+}
