@@ -1,0 +1,8 @@
+use "../src/vexc/eval.vex"
+
+fn main() {
+    print("[vexc] running examples/import_main.vex\n")
+    let prog = vexc_parse_program_file("examples/import_main.vex")
+    let v = vexc_eval_program(prog)
+    print("\n[vexc] returned {v}\n")
+}

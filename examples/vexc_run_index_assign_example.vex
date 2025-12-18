@@ -1,12 +1,8 @@
-use "../src/vexc/tokenize.vex"
-use "../src/vexc/program.vex"
 use "../src/vexc/eval.vex"
 
 fn main() {
     print("[vexc] running examples/index_assign.vex\n")
-    let src = read_file("examples/index_assign.vex")
-    let toks = vexc_tokenize(src)
-    let prog = vexc_parse_program(toks, 0)
+    let prog = vexc_parse_program_file("examples/index_assign.vex")
     let v = vexc_eval_program(prog)
     print("\n[vexc] returned {v}\n")
 }

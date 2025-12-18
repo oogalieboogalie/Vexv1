@@ -78,6 +78,7 @@ This is where we left off and where to go next.
       - `examples/vexc_run_for_index_example.vex` (runs `examples/for_index.vex` under vexc; exercises `for`, `xs[i]`, and string interpolation)
       - `examples/vexc_run_index_assign_example.vex` (runs `examples/index_assign.vex` under vexc; exercises `xs[i] = v` / `xs[i] += v`)
       - `examples/vexc_run_dot_example.vex` (runs `examples/dot.vex` under vexc; exercises `.name` and `obj.field`)
+      - `examples/vexc_run_import_example.vex` (runs `examples/import_main.vex` under vexc; exercises top-level `use "./file.vex"` imports)
 
 ## Medium-Term Goals
 

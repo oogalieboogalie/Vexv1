@@ -1,5 +1,3 @@
-use "../src/vexc/tokenize.vex"
-use "../src/vexc/stmt.vex"
 use "../src/vexc/eval.vex"
 
 fn main() {

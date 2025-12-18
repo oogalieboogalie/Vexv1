@@ -75,6 +75,7 @@ fn vexc_kind_name(k) {
     if k == 38 { return "RBracket" }
     if k == 39 { return "Break" }
     if k == 40 { return "Continue" }
+    if k == 41 { return "Use" }
     return "Unknown"
 }
 
@@ -150,6 +151,7 @@ fn vexc_tokenize(src) {
             if kind == 1 and len == 3 {
                 if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
                 if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 114 { let kind = 34 } // for
+                if str_char(src, start + 0) == 117 and str_char(src, start + 1) == 115 and str_char(src, start + 2) == 101 { let kind = 41 } // use
             }
             if kind == 1 and len == 4 {
                 if str_char(src, start + 0) == 101 and str_char(src, start + 1) == 108 and str_char(src, start + 2) == 115 and str_char(src, start + 3) == 101 { let kind = 28 } // else

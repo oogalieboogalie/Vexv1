@@ -5,6 +5,28 @@
 // Func:    [101, name, p1, p2, p3, is_accel, body_block, params]
 
 use "./stmt.vex"
+use "./tokenize.vex"
+
+fn vexc_list_extend(dst, src) {
+    let i = 0
+    let n = list_len(src)
+    while i < n {
+        list_push(dst, list_get(src, i))
+        let i = i + 1
+    }
+    return 0
+}
+
+fn vexc_path_dirname(path) {
+    let n = str_len(path)
+    let i = n - 1
+    while i >= 0 {
+        let c = str_char(path, i)
+        if c == 47 or c == 92 { return str_slice(path, 0, i) }
+        let i = i - 1
+    }
+    return ""
+}
 
 fn vexc_parse_func(toks, pos, is_accel) {
     // consume 'fn'
@@ -51,10 +73,38 @@ fn vexc_parse_func(toks, pos, is_accel) {
     return vexc_pair(node, pos)
 }
 
-fn vexc_parse_program(toks, pos) {
+fn vexc_parse_program_with_imports(toks, path, imports_seen) {
     let funcs = list_create()
 
+    let pos = 0
     while vexc_tok_kind(toks, pos) != 0 {
+        // use "./file.vex" (top-level include; merges functions into this program)
+        if vexc_tok_kind(toks, pos) == 41 {
+            let pos = pos + 1
+            if vexc_tok_kind(toks, pos) != 3 {
+                print("[vexc] error: use expects a string path\n")
+                continue
+            }
+
+            let raw_path = vexc_strip_quotes(vexc_tok_text(toks, pos))
+            let pos = pos + 1
+
+            let full_path = raw_path
+            let base_dir = vexc_path_dirname(path)
+            if str_len(base_dir) != 0 {
+                let full_path = path_join(base_dir, raw_path)
+            }
+
+            if env_find(imports_seen, full_path) == 0 {
+                env_set(imports_seen, full_path, 1)
+                let src2 = read_file(full_path)
+                let toks2 = vexc_tokenize(src2)
+                let prog2 = vexc_parse_program_with_imports(toks2, full_path, imports_seen)
+                vexc_list_extend(funcs, list_get(prog2, 1))
+            }
+            continue
+        }
+
         // accel tag not wired yet; skip
         let is_accel = 0
 
@@ -73,4 +123,17 @@ fn vexc_parse_program(toks, pos) {
     list_push(prog, 100)
     list_push(prog, funcs)
     return prog
+}
+
+fn vexc_parse_program(toks, pos) {
+    let imports_seen = env_create(0)
+    return vexc_parse_program_with_imports(toks, "", imports_seen)
+}
+
+fn vexc_parse_program_file(path) {
+    let imports_seen = env_create(0)
+    env_set(imports_seen, path, 1)
+    let src = read_file(path)
+    let toks = vexc_tokenize(src)
+    return vexc_parse_program_with_imports(toks, path, imports_seen)
 }

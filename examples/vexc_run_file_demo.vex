@@ -1,29 +1,19 @@
-use "../src/vexc/tokenize.vex"
-use "../src/vexc/program.vex"
 use "../src/vexc/eval.vex"
 
 fn main() {
-    let src1 = read_file("examples/vexc_input_sum.vex")
-    let toks1 = vexc_tokenize(src1)
-    let prog1 = vexc_parse_program(toks1, 0)
+    let prog1 = vexc_parse_program_file("examples/vexc_input_sum.vex")
     let v1 = vexc_eval_program(prog1)
     print("sum returned {v1}\n")
 
-    let src2 = read_file("examples/vexc_input_break_continue.vex")
-    let toks2 = vexc_tokenize(src2)
-    let prog2 = vexc_parse_program(toks2, 0)
+    let prog2 = vexc_parse_program_file("examples/vexc_input_break_continue.vex")
     let v2 = vexc_eval_program(prog2)
     print("break/continue returned {v2}\n")
 
-    let src3 = read_file("examples/vexc_input_builtins.vex")
-    let toks3 = vexc_tokenize(src3)
-    let prog3 = vexc_parse_program(toks3, 0)
+    let prog3 = vexc_parse_program_file("examples/vexc_input_builtins.vex")
     let v3 = vexc_eval_program(prog3)
     print("builtins returned {v3}\n")
 
-    let src4 = read_file("examples/vexc_input_strings.vex")
-    let toks4 = vexc_tokenize(src4)
-    let prog4 = vexc_parse_program(toks4, 0)
+    let prog4 = vexc_parse_program_file("examples/vexc_input_strings.vex")
     let v4 = vexc_eval_program(prog4)
     print("strings returned {v4}\n")
 }

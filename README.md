@@ -35,6 +35,7 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Vex-in-Vex runs a real example (`examples/for_index.vex`): `zig build run -- eval examples/vexc_run_for_index_example.vex`
 - Vex-in-Vex runs index assignment (`examples/index_assign.vex`): `zig build run -- eval examples/vexc_run_index_assign_example.vex`
 - Vex-in-Vex runs dot syntax (`examples/dot.vex`): `zig build run -- eval examples/vexc_run_dot_example.vex`
+- Vex-in-Vex runs imports (`examples/import_main.vex`): `zig build run -- eval examples/vexc_run_import_example.vex`
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`
