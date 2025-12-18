@@ -64,6 +64,7 @@ fn vexc_kind_name(k) {
     if k == 22 { return "Less" }
     if k == 23 { return "LessEq" }
     if k == 28 { return "Else" }
+    if k == 29 { return "Dot" }
     if k == 31 { return "True" }
     if k == 32 { return "False" }
     if k == 33 { return "Null" }
@@ -190,6 +191,14 @@ fn vexc_tokenize(src) {
             list_push(toks, 36)
             list_push(toks, "..")
             let i = i + 2
+            let handled = 1
+        }
+
+        // .
+        if handled == 0 and c == 46 {
+            list_push(toks, 29)
+            list_push(toks, ".")
+            let i = i + 1
             let handled = 1
         }
 

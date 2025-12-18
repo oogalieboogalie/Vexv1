@@ -107,6 +107,21 @@ fn vexc_prefix_expr(toks, pos) {
         return vexc_pair(node, pos + 1)
     }
 
+    // dot-literal: .name -> "name"
+    if k == 29 {
+        if vexc_tok_kind(toks, pos + 1) == 1 {
+            let name = vexc_tok_text(toks, pos + 1)
+            let node = list_create()
+            list_push(node, 301)
+            list_push(node, name)
+            return vexc_pair(node, pos + 2)
+        }
+        let node = list_create()
+        list_push(node, 301)
+        list_push(node, "")
+        return vexc_pair(node, pos + 1)
+    }
+
     if k == 1 {
         let name = vexc_tok_text(toks, pos)
         let node = list_create()
@@ -134,43 +149,72 @@ fn vexc_parse_expr_bp(toks, pos, min_bp) {
     let lhs = vexc_pair_node(r)
     let pos = vexc_pair_pos(r)
 
-    // call postfix: name(args...)
-    while vexc_tok_kind(toks, pos) == 11 {
-        if list_get(lhs, 0) != 302 { break }
-        let name = list_get(lhs, 1)
+    // postfix: calls, indexing, and dot
+    while 1 {
+        // call postfix: name(args...)
+        if vexc_tok_kind(toks, pos) == 11 {
+            if list_get(lhs, 0) != 302 { break }
+            let name = list_get(lhs, 1)
 
-        let pos = pos + 1 // '('
-        let args = list_create()
-        while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
-            let r2 = vexc_parse_expr_bp(toks, pos, 0)
-            list_push(args, vexc_pair_node(r2))
-            let pos = vexc_pair_pos(r2)
+            let pos = pos + 1 // '('
+            let args = list_create()
+            while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
+                let r2 = vexc_parse_expr_bp(toks, pos, 0)
+                list_push(args, vexc_pair_node(r2))
+                let pos = vexc_pair_pos(r2)
+            }
+            if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+
+            let node = list_create()
+            list_push(node, 304)
+            list_push(node, name)
+            list_push(node, args)
+            let lhs = node
+            continue
         }
-        if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
 
-        let node = list_create()
-        list_push(node, 304)
-        list_push(node, name)
-        list_push(node, args)
-        let lhs = node
-    }
+        // indexing postfix: xs[i] -> list_get(xs, i)
+        if vexc_tok_kind(toks, pos) == 37 {
+            let r2 = vexc_parse_expr_bp(toks, pos + 1, 0)
+            let idx_expr = vexc_pair_node(r2)
+            let pos = vexc_pair_pos(r2)
+            if vexc_tok_kind(toks, pos) == 38 { let pos = pos + 1 }
 
-    // indexing postfix: xs[i] -> list_get(xs, i)
-    while vexc_tok_kind(toks, pos) == 37 {
-        let r2 = vexc_parse_expr_bp(toks, pos + 1, 0)
-        let idx_expr = vexc_pair_node(r2)
-        let pos = vexc_pair_pos(r2)
-        if vexc_tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+            let args = list_create()
+            list_push(args, lhs)
+            list_push(args, idx_expr)
 
-        let args = list_create()
-        list_push(args, lhs)
-        list_push(args, idx_expr)
+            let node = list_create()
+            list_push(node, 304)
+            list_push(node, "list_get")
+            list_push(node, args)
+            let lhs = node
+            continue
+        }
 
-        let node = list_create()
-        list_push(node, 304)
-        list_push(node, "list_get")
-        list_push(node, args)
-        let lhs = node
+        // dot postfix: obj.field -> env_find(obj, "field")
+        if vexc_tok_kind(toks, pos) == 29 {
+            if vexc_tok_kind(toks, pos + 1) != 1 { break }
+            let field = vexc_tok_text(toks, pos + 1)
+
+            let field_node = list_create()
+            list_push(field_node, 301)
+            list_push(field_node, field)
+
+            let args = list_create()
+            list_push(args, lhs)
+            list_push(args, field_node)
+
+            let node = list_create()
+            list_push(node, 304)
+            list_push(node, "env_find")
+            list_push(node, args)
+            let lhs = node
+            let pos = pos + 2
+            continue
+        }
+
+        break
     }
 
     while 1 {
