@@ -61,13 +61,19 @@ fn vexc_tokenize_cached(path, token_cache) {
     return toks
 }
 
-fn vexc_parse_func(toks, pos, is_accel, path) {
+fn vexc_token_cache_get_src(path, token_cache) {
+    let entry = env_find(token_cache, path)
+    if entry != 0 { return list_get(entry, 0) }
+    return ""
+}
+
+fn vexc_parse_func(toks, pos, is_accel, path, src) {
     // consume 'fn'
     if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
 
     let name = ""
     let name_k = vexc_tok_kind(toks, pos)
-    if name_k != 1 { vexc_error_at(toks, pos, "", "fn expects a name") }
+    if name_k != 1 { vexc_error_at(toks, pos, path, src, "fn expects a name") }
     if name_k == 1 {
         let name = vexc_tok_text(toks, pos)
         let pos = pos + 1
@@ -92,15 +98,15 @@ fn vexc_parse_func(toks, pos, is_accel, path) {
             let pos = pos + 1
         }
         let close_k = vexc_tok_kind(toks, pos)
-        if close_k != 12 { vexc_error_at(toks, pos, "", "expected ')' after params") }
+        if close_k != 12 { vexc_error_at(toks, pos, path, src, "expected ')' after params") }
         if close_k == 12 { let pos = pos + 1 }
     }
 
     while vexc_tok_kind(toks, pos) != 13 and vexc_tok_kind(toks, pos) != 0 { let pos = pos + 1 }
     if vexc_tok_kind(toks, pos) != 13 {
-        vexc_error_at(toks, pos, "", "expected '{' to start function body")
+        vexc_error_at(toks, pos, path, src, "expected '{' to start function body")
     }
-    let br = vexc_parse_block(toks, pos, path)
+    let br = vexc_parse_block(toks, pos, path, src)
     let body = vexc_pair_node(br)
     let pos = vexc_pair_pos(br)
 
@@ -116,7 +122,7 @@ fn vexc_parse_func(toks, pos, is_accel, path) {
     return vexc_pair(node, pos)
 }
 
-fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
+fn vexc_parse_program_with_imports(toks, path, src, imports_seen, token_cache) {
     let funcs = list_create()
 
     let pos = 0
@@ -125,7 +131,7 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
         if vexc_tok_kind(toks, pos) == 41 {
             let pos = pos + 1
             if vexc_tok_kind(toks, pos) != 3 {
-                vexc_error_at(toks, pos, path, "use expects a string path")
+                vexc_error_at(toks, pos, path, src, "use expects a string path")
                 let pos = pos + 1
                 continue
             }
@@ -142,7 +148,8 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
             if env_find(imports_seen, full_path) == 0 {
                 env_set(imports_seen, full_path, 1)
                 let toks2 = vexc_tokenize_cached(full_path, token_cache)
-                let prog2 = vexc_parse_program_with_imports(toks2, full_path, imports_seen, token_cache)
+                let src2 = vexc_token_cache_get_src(full_path, token_cache)
+                let prog2 = vexc_parse_program_with_imports(toks2, full_path, src2, imports_seen, token_cache)
                 vexc_list_extend(funcs, list_get(prog2, 1))
             }
             continue
@@ -154,12 +161,12 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
             let accel_pos = pos
             let pos = pos + 1
             if vexc_tok_kind(toks, pos) != 6 {
-                vexc_error_at(toks, accel_pos, path, "@accel must precede fn")
+                vexc_error_at(toks, accel_pos, path, src, "@accel must precede fn")
             }
         }
 
         if vexc_tok_kind(toks, pos) == 6 {
-            let fr = vexc_parse_func(toks, pos, is_accel, path)
+            let fr = vexc_parse_func(toks, pos, is_accel, path, src)
             list_push(funcs, vexc_pair_node(fr))
             let pos = vexc_pair_pos(fr)
         }
@@ -178,14 +185,15 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
 fn vexc_parse_program(toks, pos) {
     let imports_seen = env_create(0)
     let token_cache = vexc_token_cache_create()
-    return vexc_parse_program_with_imports(toks, "", imports_seen, token_cache)
+    return vexc_parse_program_with_imports(toks, "", "", imports_seen, token_cache)
 }
 
 fn vexc_parse_program_file_cached(path, token_cache) {
     let imports_seen = env_create(0)
     env_set(imports_seen, path, 1)
     let toks = vexc_tokenize_cached(path, token_cache)
-    return vexc_parse_program_with_imports(toks, path, imports_seen, token_cache)
+    let src = vexc_token_cache_get_src(path, token_cache)
+    return vexc_parse_program_with_imports(toks, path, src, imports_seen, token_cache)
 }
 
 fn vexc_parse_program_file(path) {

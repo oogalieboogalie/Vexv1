@@ -42,7 +42,7 @@ This is where we left off and where to go next.
   - Tokenizer/Pratt/stmt parser covers `> >=`, `and`/`or`, dot/indexing, and top-level `@accel` tags.
   - Evaluator runs the existing demo suite with string interpolation (`{name}` + `{fn(arg)}`) and break/continue propagation.
   - Token cache avoids re-tokenizing unchanged files across repeated parses (`vexc_parse_program_file_cached`).
-  - Token stream carries line/col; parser emits basic location errors (missing delimiters, bad `use`, stray `@accel`) with file/line/col and caret snippets when a path is known.
+  - Token stream carries line/col; parser emits basic location errors (missing delimiters, bad `use`, stray `@accel`) with file/line/col and caret snippets when source is available.
   - `src/vexc/compiler_mini.vex` ports the early `vex_tokenize` and now handles strings and `- * / == != ;` (demo: `examples/vexc_input_compiler_mini_src.vex`).
 
 ## Near-Term Goals

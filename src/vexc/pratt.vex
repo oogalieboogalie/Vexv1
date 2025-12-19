@@ -72,14 +72,17 @@ fn vexc_print_caret(col) {
     return 0
 }
 
-fn vexc_error_at(toks, pos, path, msg) {
+fn vexc_error_at(toks, pos, path, src, msg) {
     let line = vexc_tok_line(toks, pos)
     let col = vexc_tok_col(toks, pos)
     if str_len(path) != 0 {
         print("[vexc] error: {path}:{line}:{col}: {msg}\n")
-        let src = read_file(path)
-        if str_len(src) != 0 {
-            let line_text = vexc_line_slice(src, line)
+        let src_text = src
+        if str_len(src_text) == 0 {
+            let src_text = read_file(path)
+        }
+        if str_len(src_text) != 0 {
+            let line_text = vexc_line_slice(src_text, line)
             if str_len(line_text) != 0 {
                 print(line_text)
                 print("\n")
@@ -91,6 +94,16 @@ fn vexc_error_at(toks, pos, path, msg) {
         return 0
     }
     print("[vexc] error: {line}:{col}: {msg}\n")
+    if str_len(src) != 0 {
+        let line_text = vexc_line_slice(src, line)
+        if str_len(line_text) != 0 {
+            print(line_text)
+            print("\n")
+            let caret_col = col
+            if caret_col < 1 { let caret_col = 1 }
+            vexc_print_caret(caret_col)
+        }
+    }
     return 0
 }
 
@@ -137,7 +150,7 @@ fn vexc_infix_rbp(op) {
     return 0
 }
 
-fn vexc_prefix_expr(toks, pos, path) {
+fn vexc_prefix_expr(toks, pos, path, src) {
     let k = vexc_tok_kind(toks, pos)
 
     if k == 31 {
@@ -199,11 +212,11 @@ fn vexc_prefix_expr(toks, pos, path) {
     }
 
     if k == 11 {
-        let r = vexc_parse_expr_bp(toks, pos + 1, 0, path)
+        let r = vexc_parse_expr_bp(toks, pos + 1, 0, path, src)
         let expr = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
         let close_k = vexc_tok_kind(toks, pos)
-        if close_k != 12 { vexc_error_at(toks, pos, path, "expected ')'") }
+        if close_k != 12 { vexc_error_at(toks, pos, path, src, "expected ')'") }
         if close_k == 12 { let pos = pos + 1 }
         return vexc_pair(expr, pos)
     }
@@ -214,8 +227,8 @@ fn vexc_prefix_expr(toks, pos, path) {
     return vexc_pair(node, pos + 1)
 }
 
-fn vexc_parse_expr_bp(toks, pos, min_bp, path) {
-    let r = vexc_prefix_expr(toks, pos, path)
+fn vexc_parse_expr_bp(toks, pos, min_bp, path, src) {
+    let r = vexc_prefix_expr(toks, pos, path, src)
     let lhs = vexc_pair_node(r)
     let pos = vexc_pair_pos(r)
 
@@ -229,12 +242,12 @@ fn vexc_parse_expr_bp(toks, pos, min_bp, path) {
             let pos = pos + 1 // '('
             let args = list_create()
             while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
-                let r2 = vexc_parse_expr_bp(toks, pos, 0, path)
+                let r2 = vexc_parse_expr_bp(toks, pos, 0, path, src)
                 list_push(args, vexc_pair_node(r2))
                 let pos = vexc_pair_pos(r2)
             }
             let close_k = vexc_tok_kind(toks, pos)
-            if close_k != 12 { vexc_error_at(toks, pos, path, "expected ')' after call args") }
+            if close_k != 12 { vexc_error_at(toks, pos, path, src, "expected ')' after call args") }
             if close_k == 12 { let pos = pos + 1 }
 
             let node = list_create()
@@ -247,11 +260,11 @@ fn vexc_parse_expr_bp(toks, pos, min_bp, path) {
 
         // indexing postfix: xs[i] -> list_get(xs, i)
         if vexc_tok_kind(toks, pos) == 37 {
-            let r2 = vexc_parse_expr_bp(toks, pos + 1, 0, path)
+            let r2 = vexc_parse_expr_bp(toks, pos + 1, 0, path, src)
             let idx_expr = vexc_pair_node(r2)
             let pos = vexc_pair_pos(r2)
             let close_k = vexc_tok_kind(toks, pos)
-            if close_k != 38 { vexc_error_at(toks, pos, path, "expected ']'") }
+            if close_k != 38 { vexc_error_at(toks, pos, path, src, "expected ']'") }
             if close_k == 38 { let pos = pos + 1 }
 
             let args = list_create()
@@ -298,7 +311,7 @@ fn vexc_parse_expr_bp(toks, pos, min_bp, path) {
         if l_bp < min_bp { break }
 
         let r_bp = vexc_infix_rbp(op)
-        let r2 = vexc_parse_expr_bp(toks, pos + 1, r_bp, path)
+        let r2 = vexc_parse_expr_bp(toks, pos + 1, r_bp, path, src)
         let rhs = vexc_pair_node(r2)
         let pos = vexc_pair_pos(r2)
 
@@ -313,7 +326,7 @@ fn vexc_parse_expr_bp(toks, pos, min_bp, path) {
     return vexc_pair(lhs, pos)
 }
 
-fn vexc_parse_expr(toks, pos, path) { return vexc_parse_expr_bp(toks, pos, 0, path) }
+fn vexc_parse_expr(toks, pos, path, src) { return vexc_parse_expr_bp(toks, pos, 0, path, src) }
 
 fn vexc_op_name(op) {
     if op == 18 { return "+" }
