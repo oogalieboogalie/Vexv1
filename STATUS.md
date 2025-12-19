@@ -1,17 +1,20 @@
 # Status
 
 ## Current Focus
-- vexc error reporting with file/line/col and caret snippets.
+- Error reporting follow-ups: recovery + output validation.
 
 ## Recently Done
 - Token stream carries line/col and dump prints positions.
 - Parser emits basic location errors for missing delimiters and bad `use` / `@accel`.
 - Errors now show caret snippets when source is available (path or in-memory src).
+- Threaded `path` + `src` through vexc parse calls for consistent diagnostics.
+- Eval errors now include file path when provided (`vexc_eval_program_path`).
+- Added a parse error demo (`examples/vexc_input_error.vex` + runner).
 
 ## Next Steps
 1) Add simple error recovery (skip to next `fn` or `}` after an error).
-2) Thread path/src into eval errors (undefined var/function) for consistent reporting.
-3) Add a tiny error demo file to exercise parse errors and caret output.
+2) Add tests or a short script to validate error output format.
 
 ## Commands
 - `zig build run -- eval examples/vexc_run_file_demo.vex`
+- `zig build run -- eval examples/vexc_run_error_demo.vex`

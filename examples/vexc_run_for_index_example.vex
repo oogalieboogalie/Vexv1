@@ -4,6 +4,6 @@ fn main() {
     print("[vexc] running examples/for_index.vex\n")
     let token_cache = vexc_token_cache_create()
     let prog = vexc_parse_program_file_cached("examples/for_index.vex", token_cache)
-    let v = vexc_eval_program(prog)
+    let v = vexc_eval_program_path(prog, "examples/for_index.vex")
     print("\n[vexc] returned {v}\n")
 }

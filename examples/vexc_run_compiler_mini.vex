@@ -3,6 +3,6 @@ use "../src/vexc/eval.vex"
 fn main() {
     let token_cache = vexc_token_cache_create()
     let prog = vexc_parse_program_file_cached("examples/vexc_input_compiler_mini.vex", token_cache)
-    let v = vexc_eval_program(prog)
+    let v = vexc_eval_program_path(prog, "examples/vexc_input_compiler_mini.vex")
     print("compiler mini returned {v}\n")
 }

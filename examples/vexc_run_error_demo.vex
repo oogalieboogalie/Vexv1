@@ -1,0 +1,7 @@
+use "../src/vexc/program.vex"
+
+fn main() {
+    print("[vexc] parsing examples/vexc_input_error.vex\n")
+    let token_cache = vexc_token_cache_create()
+    _ = vexc_parse_program_file_cached("examples/vexc_input_error.vex", token_cache)
+}

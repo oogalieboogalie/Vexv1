@@ -4,23 +4,23 @@ fn main() {
     let token_cache = vexc_token_cache_create()
 
     let prog1 = vexc_parse_program_file_cached("examples/vexc_input_sum.vex", token_cache)
-    let v1 = vexc_eval_program(prog1)
+    let v1 = vexc_eval_program_path(prog1, "examples/vexc_input_sum.vex")
     print("sum returned {v1}\n")
 
     let prog2 = vexc_parse_program_file_cached("examples/vexc_input_break_continue.vex", token_cache)
-    let v2 = vexc_eval_program(prog2)
+    let v2 = vexc_eval_program_path(prog2, "examples/vexc_input_break_continue.vex")
     print("break/continue returned {v2}\n")
 
     let prog3 = vexc_parse_program_file_cached("examples/vexc_input_builtins.vex", token_cache)
-    let v3 = vexc_eval_program(prog3)
+    let v3 = vexc_eval_program_path(prog3, "examples/vexc_input_builtins.vex")
     print("builtins returned {v3}\n")
 
     let prog4 = vexc_parse_program_file_cached("examples/vexc_input_strings.vex", token_cache)
-    let v4 = vexc_eval_program(prog4)
+    let v4 = vexc_eval_program_path(prog4, "examples/vexc_input_strings.vex")
     print("strings returned {v4}\n")
 
     let prog5 = vexc_parse_program_file_cached("examples/vexc_input_logic.vex", token_cache)
-    let v5 = vexc_eval_program(prog5)
+    let v5 = vexc_eval_program_path(prog5, "examples/vexc_input_logic.vex")
     print("logic returned {v5}\n")
 
 }
