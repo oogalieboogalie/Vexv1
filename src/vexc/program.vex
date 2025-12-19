@@ -61,7 +61,7 @@ fn vexc_tokenize_cached(path, token_cache) {
     return toks
 }
 
-fn vexc_parse_func(toks, pos, is_accel) {
+fn vexc_parse_func(toks, pos, is_accel, path) {
     // consume 'fn'
     if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
 
@@ -100,7 +100,7 @@ fn vexc_parse_func(toks, pos, is_accel) {
     if vexc_tok_kind(toks, pos) != 13 {
         vexc_error_at(toks, pos, "", "expected '{' to start function body")
     }
-    let br = vexc_parse_block(toks, pos)
+    let br = vexc_parse_block(toks, pos, path)
     let body = vexc_pair_node(br)
     let pos = vexc_pair_pos(br)
 
@@ -126,6 +126,7 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
             let pos = pos + 1
             if vexc_tok_kind(toks, pos) != 3 {
                 vexc_error_at(toks, pos, path, "use expects a string path")
+                let pos = pos + 1
                 continue
             }
 
@@ -158,7 +159,7 @@ fn vexc_parse_program_with_imports(toks, path, imports_seen, token_cache) {
         }
 
         if vexc_tok_kind(toks, pos) == 6 {
-            let fr = vexc_parse_func(toks, pos, is_accel)
+            let fr = vexc_parse_func(toks, pos, is_accel, path)
             list_push(funcs, vexc_pair_node(fr))
             let pos = vexc_pair_pos(fr)
         }

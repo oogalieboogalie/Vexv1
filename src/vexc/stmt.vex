@@ -17,7 +17,7 @@ fn vexc_make_block(stmts) {
     return b
 }
 
-fn vexc_parse_block(toks, pos) {
+fn vexc_parse_block(toks, pos, path) {
     let stmts = list_create()
     let opened = 0
     if vexc_tok_kind(toks, pos) == 13 {
@@ -26,7 +26,7 @@ fn vexc_parse_block(toks, pos) {
     }
 
     while vexc_tok_kind(toks, pos) != 14 and vexc_tok_kind(toks, pos) != 0 {
-        let r = vexc_parse_stmt(toks, pos)
+        let r = vexc_parse_stmt(toks, pos, path)
         list_push(stmts, vexc_pair_node(r))
         let pos = vexc_pair_pos(r)
     }
@@ -37,12 +37,12 @@ fn vexc_parse_block(toks, pos) {
         let pos = pos + 1
     }
     if opened != 0 and has_close == 0 {
-        vexc_error_at(toks, pos, "", "expected '}'")
+        vexc_error_at(toks, pos, path, "expected '}'")
     }
     return vexc_pair(vexc_make_block(stmts), pos)
 }
 
-fn vexc_parse_stmt(toks, pos) {
+fn vexc_parse_stmt(toks, pos, path) {
     let k = vexc_tok_kind(toks, pos)
 
     // print(expr)
@@ -54,13 +54,13 @@ fn vexc_parse_stmt(toks, pos) {
             let pos = pos + 1
         }
 
-        let r = vexc_parse_expr(toks, pos)
+        let r = vexc_parse_expr(toks, pos, path)
         let expr = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
 
         let close_k = vexc_tok_kind(toks, pos)
         if had_paren != 0 and close_k != 12 {
-            vexc_error_at(toks, pos, "", "expected ')' after print expr")
+            vexc_error_at(toks, pos, path, "expected ')' after print expr")
         }
         if close_k == 12 { let pos = pos + 1 }
 
@@ -74,7 +74,7 @@ fn vexc_parse_stmt(toks, pos) {
     if k == 4 {
         let name = ""
         if vexc_tok_kind(toks, pos + 1) != 1 {
-            vexc_error_at(toks, pos + 1, "", "let expects identifier")
+            vexc_error_at(toks, pos + 1, path, "let expects identifier")
         }
         if vexc_tok_kind(toks, pos + 1) == 1 { let name = vexc_tok_text(toks, pos + 1) }
 
@@ -87,10 +87,10 @@ fn vexc_parse_stmt(toks, pos) {
             let pos = pos + 1
         }
         if saw_equal == 0 {
-            vexc_error_at(toks, pos, "", "let expects '='")
+            vexc_error_at(toks, pos, path, "let expects '='")
         }
 
-        let r = vexc_parse_expr(toks, pos)
+        let r = vexc_parse_expr(toks, pos, path)
         let expr = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
 
@@ -104,13 +104,13 @@ fn vexc_parse_stmt(toks, pos) {
     // while cond { ... }
     if k == 9 {
         let pos = pos + 1
-        let r = vexc_parse_expr(toks, pos)
+        let r = vexc_parse_expr(toks, pos, path)
         let cond = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
 
         let body = 0
         if vexc_tok_kind(toks, pos) == 13 {
-            let br = vexc_parse_block(toks, pos)
+            let br = vexc_parse_block(toks, pos, path)
             let body = vexc_pair_node(br)
             let pos = vexc_pair_pos(br)
 
@@ -121,7 +121,7 @@ fn vexc_parse_stmt(toks, pos) {
             return vexc_pair(node, pos)
         }
 
-        let sr = vexc_parse_stmt(toks, pos)
+        let sr = vexc_parse_stmt(toks, pos, path)
         let inner = vexc_pair_node(sr)
         let pos = vexc_pair_pos(sr)
         let stmts = list_create()
@@ -140,37 +140,37 @@ fn vexc_parse_stmt(toks, pos) {
         let pos = pos + 1
         let name = ""
         if vexc_tok_kind(toks, pos) != 1 {
-            vexc_error_at(toks, pos, "", "for expects identifier")
+            vexc_error_at(toks, pos, path, "for expects identifier")
         }
         if vexc_tok_kind(toks, pos) == 1 { let name = vexc_tok_text(toks, pos) }
 
         if vexc_tok_kind(toks, pos) == 1 { let pos = pos + 1 }
         if vexc_tok_kind(toks, pos) != 35 {
-            vexc_error_at(toks, pos, "", "for expects 'in'")
+            vexc_error_at(toks, pos, path, "for expects 'in'")
         }
         if vexc_tok_kind(toks, pos) == 35 { let pos = pos + 1 }
 
-        let r1 = vexc_parse_expr(toks, pos)
+        let r1 = vexc_parse_expr(toks, pos, path)
         let start_expr = vexc_pair_node(r1)
         let pos = vexc_pair_pos(r1)
 
         if vexc_tok_kind(toks, pos) != 36 {
-            vexc_error_at(toks, pos, "", "for expects '..'")
+            vexc_error_at(toks, pos, path, "for expects '..'")
         }
         if vexc_tok_kind(toks, pos) == 36 { let pos = pos + 1 }
 
-        let r2 = vexc_parse_expr(toks, pos)
+        let r2 = vexc_parse_expr(toks, pos, path)
         let end_expr = vexc_pair_node(r2)
         let pos = vexc_pair_pos(r2)
 
         let body = 0
         if vexc_tok_kind(toks, pos) == 13 {
-            let br = vexc_parse_block(toks, pos)
+            let br = vexc_parse_block(toks, pos, path)
             let body = vexc_pair_node(br)
             let pos = vexc_pair_pos(br)
         }
         if body == 0 {
-            let sr = vexc_parse_stmt(toks, pos)
+            let sr = vexc_parse_stmt(toks, pos, path)
             let inner = vexc_pair_node(sr)
             let pos = vexc_pair_pos(sr)
             let stmts = list_create()
@@ -207,7 +207,7 @@ fn vexc_parse_stmt(toks, pos) {
         let expr = 0
         let next = vexc_tok_kind(toks, pos)
         if next != 14 and next != 0 {
-            let r = vexc_parse_expr(toks, pos)
+            let r = vexc_parse_expr(toks, pos, path)
             let expr = vexc_pair_node(r)
             let pos = vexc_pair_pos(r)
         }
@@ -224,16 +224,16 @@ fn vexc_parse_stmt(toks, pos) {
 
         // name[idx] = expr / name[idx] += expr
         if vexc_tok_kind(toks, pos + 1) == 37 {
-            let ir = vexc_parse_expr(toks, pos + 2)
+            let ir = vexc_parse_expr(toks, pos + 2, path)
             let idx_expr = vexc_pair_node(ir)
             let pos = vexc_pair_pos(ir)
             let close_k = vexc_tok_kind(toks, pos)
-            if close_k != 38 { vexc_error_at(toks, pos, "", "expected ']'") }
+            if close_k != 38 { vexc_error_at(toks, pos, path, "expected ']'") }
             if close_k == 38 { let pos = pos + 1 }
 
             let op = vexc_tok_kind(toks, pos)
             if op == 15 or op == 30 {
-                let vr = vexc_parse_expr(toks, pos + 1)
+                let vr = vexc_parse_expr(toks, pos + 1, path)
                 let val_expr = vexc_pair_node(vr)
                 let pos = vexc_pair_pos(vr)
 
@@ -249,7 +249,7 @@ fn vexc_parse_stmt(toks, pos) {
 
         let op = vexc_tok_kind(toks, pos + 1)
         if op == 15 or op == 30 {
-            let r = vexc_parse_expr(toks, pos + 2)
+            let r = vexc_parse_expr(toks, pos + 2, path)
             let expr = vexc_pair_node(r)
             let pos = vexc_pair_pos(r)
 
@@ -265,20 +265,20 @@ fn vexc_parse_stmt(toks, pos) {
     // if cond { ... } (else { ... })?
     if k == 8 {
         let pos = pos + 1
-        let r = vexc_parse_expr(toks, pos)
+        let r = vexc_parse_expr(toks, pos, path)
         let cond = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
 
         let then_block = 0
         let did_then = 0
         if vexc_tok_kind(toks, pos) == 13 {
-            let br = vexc_parse_block(toks, pos)
+            let br = vexc_parse_block(toks, pos, path)
             let then_block = vexc_pair_node(br)
             let pos = vexc_pair_pos(br)
             let did_then = 1
         }
         if did_then == 0 {
-            let sr = vexc_parse_stmt(toks, pos)
+            let sr = vexc_parse_stmt(toks, pos, path)
             let inner = vexc_pair_node(sr)
             let pos = vexc_pair_pos(sr)
             let stmts = list_create()
@@ -292,13 +292,13 @@ fn vexc_parse_stmt(toks, pos) {
 
             let did_else = 0
             if vexc_tok_kind(toks, pos) == 13 {
-                let br = vexc_parse_block(toks, pos)
+                let br = vexc_parse_block(toks, pos, path)
                 let else_block = vexc_pair_node(br)
                 let pos = vexc_pair_pos(br)
                 let did_else = 1
             }
             if did_else == 0 {
-                let sr = vexc_parse_stmt(toks, pos)
+                let sr = vexc_parse_stmt(toks, pos, path)
                 let inner = vexc_pair_node(sr)
                 let pos = vexc_pair_pos(sr)
                 let stmts = list_create()
@@ -317,14 +317,14 @@ fn vexc_parse_stmt(toks, pos) {
 
     // { ... }
     if k == 13 {
-        let br = vexc_parse_block(toks, pos)
+        let br = vexc_parse_block(toks, pos, path)
         let block = vexc_pair_node(br)
         let pos = vexc_pair_pos(br)
         return vexc_pair(block, pos)
     }
 
     // Fallback: expression statement.
-    let r = vexc_parse_expr(toks, pos)
+    let r = vexc_parse_expr(toks, pos, path)
     let expr = vexc_pair_node(r)
     let pos = vexc_pair_pos(r)
 

@@ -18,7 +18,7 @@ fn main() {
     let toks = vexc_tokenize(src)
     vexc_dump_tokens(toks, 200)
 
-    let br = vexc_parse_block(toks, 0)
+    let br = vexc_parse_block(toks, 0, "")
     let block = vexc_pair_node(br)
 
     let funcs = env_create()
