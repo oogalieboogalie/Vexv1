@@ -19,15 +19,38 @@ fn vexc_pair_node(p) { return list_get(p, 0) }
 fn vexc_pair_pos(p) { return list_get(p, 1) }
 
 fn vexc_tok_kind(toks, pos) {
-    let idx = pos * 2
+    let idx = pos * 4
     if idx < list_len(toks) { return list_get(toks, idx) }
     return 0
 }
 
 fn vexc_tok_text(toks, pos) {
-    let idx = pos * 2 + 1
+    let idx = pos * 4 + 1
     if idx < list_len(toks) { return list_get(toks, idx) }
     return ""
+}
+
+fn vexc_tok_line(toks, pos) {
+    let idx = pos * 4 + 2
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 0
+}
+
+fn vexc_tok_col(toks, pos) {
+    let idx = pos * 4 + 3
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 0
+}
+
+fn vexc_error_at(toks, pos, path, msg) {
+    let line = vexc_tok_line(toks, pos)
+    let col = vexc_tok_col(toks, pos)
+    if str_len(path) != 0 {
+        print("[vexc] error: {path}:{line}:{col}: {msg}\n")
+        return 0
+    }
+    print("[vexc] error: {line}:{col}: {msg}\n")
+    return 0
 }
 
 fn vexc_parse_int(s) {
@@ -138,7 +161,9 @@ fn vexc_prefix_expr(toks, pos) {
         let r = vexc_parse_expr_bp(toks, pos + 1, 0)
         let expr = vexc_pair_node(r)
         let pos = vexc_pair_pos(r)
-        if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        let close_k = vexc_tok_kind(toks, pos)
+        if close_k != 12 { vexc_error_at(toks, pos, "", "expected ')'") }
+        if close_k == 12 { let pos = pos + 1 }
         return vexc_pair(expr, pos)
     }
 
@@ -167,7 +192,9 @@ fn vexc_parse_expr_bp(toks, pos, min_bp) {
                 list_push(args, vexc_pair_node(r2))
                 let pos = vexc_pair_pos(r2)
             }
-            if vexc_tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+            let close_k = vexc_tok_kind(toks, pos)
+            if close_k != 12 { vexc_error_at(toks, pos, "", "expected ')' after call args") }
+            if close_k == 12 { let pos = pos + 1 }
 
             let node = list_create()
             list_push(node, 304)
@@ -182,7 +209,9 @@ fn vexc_parse_expr_bp(toks, pos, min_bp) {
             let r2 = vexc_parse_expr_bp(toks, pos + 1, 0)
             let idx_expr = vexc_pair_node(r2)
             let pos = vexc_pair_pos(r2)
-            if vexc_tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+            let close_k = vexc_tok_kind(toks, pos)
+            if close_k != 38 { vexc_error_at(toks, pos, "", "expected ']'") }
+            if close_k == 38 { let pos = pos + 1 }
 
             let args = list_create()
             list_push(args, lhs)

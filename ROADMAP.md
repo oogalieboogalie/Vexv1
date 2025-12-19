@@ -42,6 +42,7 @@ This is where we left off and where to go next.
   - Tokenizer/Pratt/stmt parser covers `> >=`, `and`/`or`, dot/indexing, and top-level `@accel` tags.
   - Evaluator runs the existing demo suite with string interpolation (`{name}` + `{fn(arg)}`) and break/continue propagation.
   - Token cache avoids re-tokenizing unchanged files across repeated parses (`vexc_parse_program_file_cached`).
+  - Token stream carries line/col; parser emits basic location errors (missing delimiters, bad `use`, stray `@accel`).
   - `src/vexc/compiler_mini.vex` ports the early `vex_tokenize` and now handles strings and `- * / == != ;` (demo: `examples/vexc_input_compiler_mini_src.vex`).
 
 ## Near-Term Goals
@@ -92,7 +93,7 @@ This is where we left off and where to go next.
 
 - Core language features are in place in the bootstrap interpreter, and the vexc path now runs multiple real examples end-to-end.
 - The self-hosting story is real but still narrow: tokens/parsing/eval exist in vexc, yet large parts of `compiler.vex` remain to be pulled through.
-- Biggest gaps to feel "nice": richer error messages/locations, a stable module/package story, a fuller stdlib, and tooling (formatter/tests).
+- Biggest gaps to feel "nice": richer error diagnostics beyond line/col (context, suggestions), a stable module/package story, a fuller stdlib, and tooling (formatter/tests).
 - Performance is usable for demos but still needs caching, faster tokenization, and tighter runtime paths to feel snappy.
 
 ## Medium-Term Goals

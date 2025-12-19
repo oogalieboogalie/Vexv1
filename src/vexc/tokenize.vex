@@ -1,7 +1,8 @@
 // src/vexc/tokenize.vex
 // Core-Vex port of the `compiler.vex` tokenizer idea (minimal subset for now).
 //
-// Token list format: flat pairs [kind,text, kind,text, ... , Eof,""].
+// Token list format: flat quads [kind,text,line,col, ... , Eof,"",line,col].
+// Line/col are 1-based.
 // Kind values match `src/core/lex.vex` / `src/compiler_core.vex`.
 
 fn vexc_consume_digits(src, i, n) {
@@ -82,17 +83,27 @@ fn vexc_kind_name(k) {
     return "Unknown"
 }
 
+fn vexc_push_tok(toks, kind, text, line, col) {
+    list_push(toks, kind)
+    list_push(toks, text)
+    list_push(toks, line)
+    list_push(toks, col)
+    return 0
+}
+
 fn vexc_dump_tokens(toks, max) {
     let limit = list_len(toks)
-    let max_entries = max * 2
+    let max_entries = max * 4
     if max_entries < limit { let limit = max_entries }
 
     let i = 0
     while i < limit {
         let k = list_get(toks, i)
         let txt = list_get(toks, i + 1)
-        print("tok:{vexc_kind_name(k)}:{txt}\n")
-        let i = i + 2
+        let line = list_get(toks, i + 2)
+        let col = list_get(toks, i + 3)
+        print("tok:{vexc_kind_name(k)}:{txt} @{line}:{col}\n")
+        let i = i + 4
     }
 }
 
@@ -101,45 +112,82 @@ fn vexc_tokenize(src) {
 
     let i = 0
     let n = str_len(src)
+    let line = 1
+    let col = 1
     while i < n {
         let c = str_char(src, i)
-        // whitespace (control + space)
-        if c < 33 {
+        // whitespace (control + space + semicolon)
+        if c < 33 or c == 59 {
+            if c == 10 {
+                let line = line + 1
+                let col = 1
+            } else {
+                let col = col + 1
+            }
             let i = i + 1
             continue
         }
 
         // line comments: // ...
         if c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
-            let i = vexc_skip_line_comment(src, i + 2, n)
+            let i = i + 2
+            let col = col + 2
+            while i < n {
+                let c2 = str_char(src, i)
+                if c2 == 10 {
+                    let i = i + 1
+                    let line = line + 1
+                    let col = 1
+                    break
+                }
+                let i = i + 1
+                let col = col + 1
+            }
             continue
         }
 
         // strings: " ... "
         if c == 34 {
             let start = i
+            let start_line = line
+            let start_col = col
             let i = i + 1
+            let col = col + 1
             while i < n and str_char(src, i) != 34 {
+                let c2 = str_char(src, i)
+                if c2 == 10 {
+                    let i = i + 1
+                    let line = line + 1
+                    let col = 1
+                    continue
+                }
                 let i = i + 1
+                let col = col + 1
             }
-            if i < n { let i = i + 1 }
-            list_push(toks, 3)
-            list_push(toks, str_slice(src, start, i))
+            if i < n {
+                let i = i + 1
+                let col = col + 1
+            }
+            vexc_push_tok(toks, 3, str_slice(src, start, i), start_line, start_col)
             continue
         }
 
         // numbers
         if 47 < c and c < 58 {
             let start = i
+            let start_line = line
+            let start_col = col
             let i = vexc_consume_digits(src, i, n)
-            list_push(toks, 2)
-            list_push(toks, str_slice(src, start, i))
+            let col = col + (i - start)
+            vexc_push_tok(toks, 2, str_slice(src, start, i), start_line, start_col)
             continue
         }
 
         // identifier
         if c == 95 or (64 < c and c < 91) or (96 < c and c < 123) {
             let start = i
+            let start_line = line
+            let start_col = col
             let i = vexc_consume_ident(src, i, n)
             let len = i - start
 
@@ -175,107 +223,107 @@ fn vexc_tokenize(src) {
                 if str_char(src, start + 0) == 99 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 110 and str_char(src, start + 3) == 116 and str_char(src, start + 4) == 105 and str_char(src, start + 5) == 110 and str_char(src, start + 6) == 117 and str_char(src, start + 7) == 101 { let kind = 40 } // continue
             }
 
-            list_push(toks, kind)
-            list_push(toks, str_slice(src, start, i))
+            vexc_push_tok(toks, kind, str_slice(src, start, i), start_line, start_col)
+            let col = col + len
             continue
         }
 
         // parens
-        if c == 40 { list_push(toks, 11); list_push(toks, "("); let i = i + 1; continue }
-        if c == 41 { list_push(toks, 12); list_push(toks, ")"); let i = i + 1; continue }
+        if c == 40 { vexc_push_tok(toks, 11, "(", line, col); let i = i + 1; let col = col + 1; continue }
+        if c == 41 { vexc_push_tok(toks, 12, ")", line, col); let i = i + 1; let col = col + 1; continue }
 
         // braces
-        if c == 123 { list_push(toks, 13); list_push(toks, "{"); let i = i + 1; continue }
-        if c == 125 { list_push(toks, 14); list_push(toks, "}"); let i = i + 1; continue }
+        if c == 123 { vexc_push_tok(toks, 13, "{", line, col); let i = i + 1; let col = col + 1; continue }
+        if c == 125 { vexc_push_tok(toks, 14, "}", line, col); let i = i + 1; let col = col + 1; continue }
 
         // brackets
-        if c == 91 { list_push(toks, 37); list_push(toks, "["); let i = i + 1; continue }
-        if c == 93 { list_push(toks, 38); list_push(toks, "]"); let i = i + 1; continue }
+        if c == 91 { vexc_push_tok(toks, 37, "[", line, col); let i = i + 1; let col = col + 1; continue }
+        if c == 93 { vexc_push_tok(toks, 38, "]", line, col); let i = i + 1; let col = col + 1; continue }
 
         // ..
         if c == 46 and (i + 1) < n and str_char(src, i + 1) == 46 {
-            list_push(toks, 36)
-            list_push(toks, "..")
+            vexc_push_tok(toks, 36, "..", line, col)
             let i = i + 2
+            let col = col + 2
             continue
         }
 
         // .
         if c == 46 {
-            list_push(toks, 29)
-            list_push(toks, ".")
+            vexc_push_tok(toks, 29, ".", line, col)
             let i = i + 1
+            let col = col + 1
             continue
         }
 
         // ops
         if c == 43 {
             if (i + 1) < n and str_char(src, i + 1) == 61 {
-                list_push(toks, 30)
-                list_push(toks, "+=")
+                vexc_push_tok(toks, 30, "+=", line, col)
                 let i = i + 2
+                let col = col + 2
                 continue
             }
-            list_push(toks, 18)
-            list_push(toks, "+")
+            vexc_push_tok(toks, 18, "+", line, col)
             let i = i + 1
+            let col = col + 1
             continue
         }
-        if c == 45 { list_push(toks, 19); list_push(toks, "-"); let i = i + 1; continue }
-        if c == 42 { list_push(toks, 20); list_push(toks, "*"); let i = i + 1; continue }
-        if c == 47 { list_push(toks, 21); list_push(toks, "/"); let i = i + 1; continue }
+        if c == 45 { vexc_push_tok(toks, 19, "-", line, col); let i = i + 1; let col = col + 1; continue }
+        if c == 42 { vexc_push_tok(toks, 20, "*", line, col); let i = i + 1; let col = col + 1; continue }
+        if c == 47 { vexc_push_tok(toks, 21, "/", line, col); let i = i + 1; let col = col + 1; continue }
         if c == 61 {
             if (i + 1) < n and str_char(src, i + 1) == 61 {
-                list_push(toks, 16)
-                list_push(toks, "==")
+                vexc_push_tok(toks, 16, "==", line, col)
                 let i = i + 2
+                let col = col + 2
                 continue
             }
-            list_push(toks, 15)
-            list_push(toks, "=")
+            vexc_push_tok(toks, 15, "=", line, col)
             let i = i + 1
+            let col = col + 1
             continue
         }
         if c == 33 and (i + 1) < n and str_char(src, i + 1) == 61 {
-            list_push(toks, 17)
-            list_push(toks, "!=")
+            vexc_push_tok(toks, 17, "!=", line, col)
             let i = i + 2
+            let col = col + 2
             continue
         }
 
         // < / <=
         if c == 60 {
             if (i + 1) < n and str_char(src, i + 1) == 61 {
-                list_push(toks, 23)
-                list_push(toks, "<=")
+                vexc_push_tok(toks, 23, "<=", line, col)
                 let i = i + 2
+                let col = col + 2
                 continue
             }
-            list_push(toks, 22)
-            list_push(toks, "<")
+            vexc_push_tok(toks, 22, "<", line, col)
             let i = i + 1
+            let col = col + 1
             continue
         }
 
         // > / >=
         if c == 62 {
             if (i + 1) < n and str_char(src, i + 1) == 61 {
-                list_push(toks, 27)
-                list_push(toks, ">=")
+                vexc_push_tok(toks, 27, ">=", line, col)
                 let i = i + 2
+                let col = col + 2
                 continue
             }
-            list_push(toks, 26)
-            list_push(toks, ">")
+            vexc_push_tok(toks, 26, ">", line, col)
             let i = i + 1
+            let col = col + 1
             continue
         }
 
         // unknown char: skip
         let i = i + 1
+        let col = col + 1
     }
 
-    list_push(toks, 0)
-    list_push(toks, "")
+    vexc_push_tok(toks, 0, "", line, col)
     return toks
 }
