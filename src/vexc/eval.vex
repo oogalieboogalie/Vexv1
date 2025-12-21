@@ -61,7 +61,7 @@ fn vexc_parse_int(s) {
     return v
 }
 
-fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path) {
+fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path, prog_args) {
     let i = 0
     let n = str_len(raw)
     while i < n {
@@ -121,7 +121,7 @@ fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path) {
                     list_push(call_node, 304)
                     list_push(call_node, name)
                     list_push(call_node, args)
-                    let v = vexc_eval_expr(call_node, funcs_env, vals_env, defs_env, path)
+                    let v = vexc_eval_expr(call_node, funcs_env, vals_env, defs_env, path, prog_args)
                     print(v)
                 }
 
@@ -162,7 +162,7 @@ fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path) {
     return 0
 }
 
-fn vexc_env_get(vals_env, defs_env, name, path) {
+fn vexc_env_get(vals_env, defs_env, name, path, prog_args) {
     let def = env_find(defs_env, name)
     if def == 0 {
         vexc_error_eval_name(path, "undefined var", name)
@@ -171,7 +171,7 @@ fn vexc_env_get(vals_env, defs_env, name, path) {
     return env_find(vals_env, name)
 }
 
-fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path) {
+fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) {
     let tag = list_get(expr, 0)
 
     if tag == 300 { return list_get(expr, 1) }
@@ -179,13 +179,13 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path) {
 
     if tag == 302 {
         let name = list_get(expr, 1)
-        return vexc_env_get(vals_env, defs_env, name, path)
+        return vexc_env_get(vals_env, defs_env, name, path, prog_args)
     }
 
     if tag == 303 {
         let op = list_get(expr, 1)
-        let left = vexc_eval_expr(list_get(expr, 2), funcs_env, vals_env, defs_env, path)
-        let right = vexc_eval_expr(list_get(expr, 3), funcs_env, vals_env, defs_env, path)
+        let left = vexc_eval_expr(list_get(expr, 2), funcs_env, vals_env, defs_env, path, prog_args)
+        let right = vexc_eval_expr(list_get(expr, 3), funcs_env, vals_env, defs_env, path, prog_args)
         if op == 18 { return left + right }
         if op == 19 { return left - right }
         if op == 20 { return left * right }
@@ -233,7 +233,7 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path) {
         let args = list_create()
         let i = 0
         while i < argc {
-            list_push(args, vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path))
+            list_push(args, vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args))
             let i = i + 1
         }
 
@@ -315,32 +315,44 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path) {
             return ""
         }
 
+        if name == "arg_len" {
+            return list_len(prog_args)
+        }
+        if name == "arg_get" {
+            if argc > 0 {
+                let idx = list_get(args, 0)
+                let n = list_len(prog_args)
+                if idx < n { return list_get(prog_args, idx) }
+            }
+            return 0
+        }
+
         let f = env_find(funcs_env, name)
         if f == 0 {
             vexc_error_eval_name(path, "undefined function", name)
             return 0
         }
 
-        return vexc_call_user_func(f, args, funcs_env, vals_env, defs_env, path)
+        return vexc_call_user_func(f, args, funcs_env, vals_env, defs_env, path, prog_args)
     }
 
     return 0
 }
 
-fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
+fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
     let tag = list_get(stmt, 0)
 
     if tag == 102 {
-        return vexc_eval_block(stmt, funcs_env, vals_env, defs_env, path)
+        return vexc_eval_block(stmt, funcs_env, vals_env, defs_env, path, prog_args)
     }
 
     if tag == 201 {
         let expr = list_get(stmt, 1)
         if list_get(expr, 0) == 301 {
-            vexc_render_string(funcs_env, vals_env, defs_env, list_get(expr, 1), path)
+            vexc_render_string(funcs_env, vals_env, defs_env, list_get(expr, 1), path, prog_args)
         }
         if list_get(expr, 0) != 301 {
-            let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path)
+            let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
             print(v)
         }
         return vexc_res(0, 0)
@@ -349,7 +361,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
     if tag == 200 {
         let name = list_get(stmt, 1)
         let expr = list_get(stmt, 2)
-        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path)
+        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
         env_set(vals_env, name, v)
         env_set(defs_env, name, 1)
         return vexc_res(0, 0)
@@ -359,10 +371,10 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
         let op = list_get(stmt, 1)
         let name = list_get(stmt, 2)
         let expr = list_get(stmt, 3)
-        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path)
+        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
 
         if op == 30 {
-            let base = vexc_env_get(vals_env, defs_env, name, path)
+            let base = vexc_env_get(vals_env, defs_env, name, path, prog_args)
             let v = base + v
         }
 
@@ -374,9 +386,9 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
     if tag == 208 {
         let op = list_get(stmt, 1)
         let name = list_get(stmt, 2)
-        let idx = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path)
-        let rhs = vexc_eval_expr(list_get(stmt, 4), funcs_env, vals_env, defs_env, path)
-        let list_handle = vexc_env_get(vals_env, defs_env, name, path)
+        let idx = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args)
+        let rhs = vexc_eval_expr(list_get(stmt, 4), funcs_env, vals_env, defs_env, path, prog_args)
+        let list_handle = vexc_env_get(vals_env, defs_env, name, path, prog_args)
 
         let out = rhs
         if op == 30 {
@@ -390,7 +402,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
     if tag == 202 {
         let expr = list_get(stmt, 1)
         let v = 0
-        if expr != 0 { let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path) }
+        if expr != 0 { let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) }
         return vexc_res(1, v)
     }
 
@@ -401,8 +413,8 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
         let cond = list_get(stmt, 1)
         let body = list_get(stmt, 2)
 
-        while vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path) != 0 {
-            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path)
+        while vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args) != 0 {
+            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
             let k = vexc_res_has(r)
             if k == 1 { return r }
             if k == 2 { return vexc_res(0, 0) }
@@ -412,15 +424,15 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
 
     if tag == 207 {
         let name = list_get(stmt, 1)
-        let start = vexc_eval_expr(list_get(stmt, 2), funcs_env, vals_env, defs_env, path)
-        let end = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path)
+        let start = vexc_eval_expr(list_get(stmt, 2), funcs_env, vals_env, defs_env, path, prog_args)
+        let end = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args)
         let body = list_get(stmt, 4)
         while start < end {
             if str_len(name) != 0 {
                 env_set(vals_env, name, start)
                 env_set(defs_env, name, 1)
             }
-            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path)
+            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
             let k = vexc_res_has(r)
             if k == 1 { return r }
             if k == 2 { return vexc_res(0, 0) }
@@ -433,15 +445,15 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
         let cond = list_get(stmt, 1)
         let then_block = list_get(stmt, 2)
         let else_block = list_get(stmt, 3)
-        let c = vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path)
-        if c != 0 { return vexc_eval_block(then_block, funcs_env, vals_env, defs_env, path) }
-        if else_block != 0 { return vexc_eval_block(else_block, funcs_env, vals_env, defs_env, path) }
+        let c = vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args)
+        if c != 0 { return vexc_eval_block(then_block, funcs_env, vals_env, defs_env, path, prog_args) }
+        if else_block != 0 { return vexc_eval_block(else_block, funcs_env, vals_env, defs_env, path, prog_args) }
         return vexc_res(0, 0)
     }
 
     if tag == 205 {
         let expr = list_get(stmt, 1)
-        _ = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path)
+        _ = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
         return vexc_res(0, 0)
     }
 
@@ -449,18 +461,18 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path) {
     return vexc_res(0, 0)
 }
 
-fn vexc_eval_block(block, funcs_env, vals_env, defs_env, path) {
+fn vexc_eval_block(block, funcs_env, vals_env, defs_env, path, prog_args) {
     let stmts = list_get(block, 1)
     let i = 0
     while i < list_len(stmts) {
-        let r = vexc_eval_stmt(list_get(stmts, i), funcs_env, vals_env, defs_env, path)
+        let r = vexc_eval_stmt(list_get(stmts, i), funcs_env, vals_env, defs_env, path, prog_args)
         if vexc_res_has(r) != 0 { return r }
         let i = i + 1
     }
     return vexc_res(0, 0)
 }
 
-fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, path) {
+fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, path, prog_args) {
     let parent_vals = caller_vals
     let parent_defs = caller_defs
 
@@ -478,7 +490,7 @@ fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, pat
     }
 
     let body = list_get(func_node, 6)
-    let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path)
+    let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
     let k = vexc_res_has(r)
     if k == 1 { return vexc_res_val(r) }
     if k != 0 {
@@ -488,7 +500,7 @@ fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, pat
     return 0
 }
 
-fn vexc_eval_program_path(prog, path) {
+fn vexc_eval_program_path_args(prog, path, prog_args) {
     let tag = list_get(prog, 0)
     if tag != 100 {
         vexc_error_eval(path, "expected program")
@@ -515,9 +527,16 @@ fn vexc_eval_program_path(prog, path) {
     let vals = env_create()
     let defs = env_create()
     let args = list_create()
-    return vexc_call_user_func(mainf, args, funcs_env, vals, defs, path)
+    return vexc_call_user_func(mainf, args, funcs_env, vals, defs, path, prog_args)
+}
+
+fn vexc_eval_program_path(prog, path) {
+    let prog_args = list_create()
+    if str_len(path) != 0 { list_push(prog_args, path) }
+    return vexc_eval_program_path_args(prog, path, prog_args)
 }
 
 fn vexc_eval_program(prog) {
-    return vexc_eval_program_path(prog, "")
+    let prog_args = list_create()
+    return vexc_eval_program_path_args(prog, "", prog_args)
 }

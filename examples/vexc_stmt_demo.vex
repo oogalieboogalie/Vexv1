@@ -24,7 +24,8 @@ fn main() {
     let funcs = env_create()
     let vals = env_create()
     let defs = env_create()
-    let r = vexc_eval_block(block, funcs, vals, defs, "")
+    let prog_args = list_create()
+    let r = vexc_eval_block(block, funcs, vals, defs, "", prog_args)
     let v = vexc_res_val(r)
     print("eval_return={v}\n")
 }

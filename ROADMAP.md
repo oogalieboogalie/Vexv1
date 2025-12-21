@@ -64,6 +64,7 @@ Deliverables:
   - Eval errors include file path when provided (`vexc_eval_program_path`).
   - Basic error recovery syncs to the next statement/top-level marker after some parse errors.
   - Added a simple error output validation script (`scripts/validate_vexc_errors.ps1`).
+  - Program args supported in vexc eval (`arg_len`, `arg_get`).
   - `src/vexc/compiler_mini.vex` ports the early `vex_tokenize` and now handles strings and `- * / == != ;` (demo: `examples/vexc_input_compiler_mini_src.vex`).
 
 ## Near-Term Goals
@@ -111,6 +112,7 @@ Deliverables:
       - `examples/vexc_run_error_demo.vex` (parses `examples/vexc_input_error.vex`; exercises error reporting and caret snippets)
       - `examples/vexc_run_error_func_demo.vex` (parses `examples/vexc_input_error_func.vex`; exercises function header recovery)
       - `examples/vexc_run_eval_error_demo.vex` (runs `examples/vexc_input_eval_error.vex`; exercises eval-time error reporting)
+      - `examples/vexc_run_compiler_core_parse_demo.vex` (runs compiler_core under vexc to parse `examples/hello.vex`; currently slow)
    - (Added) `src/vexc/compiler_mini.vex` + `examples/vexc_run_compiler_mini.vex` to run the early `vex_tokenize` under vexc.
 
 ## How Close Are We To A "Nice" Language?
