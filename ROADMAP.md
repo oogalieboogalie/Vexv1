@@ -2,6 +2,24 @@
 
 This is where we left off and where to go next.
 
+## Recent Progress (Since Day 1 Snapshot)
+
+- vexc front-end is usable for real demos with caching, expanded tokens, and structured error reporting.
+- Diagnostics now include file/line/col, caret snippets, and basic recovery after parse errors.
+- Added error demo runners plus a validation script for error output.
+
+## Active Sprint (Sprint 01): Diagnostics & Recovery
+
+Goals:
+- Harden parser recovery around malformed function headers/params.
+- Expand error output validation coverage.
+- Identify the next `compiler.vex` slice to port into Core/Vexc.
+
+Deliverables:
+- More resilient top-level parsing when `fn` headers are malformed.
+- Validation scripts for parse + eval errors (pass in CI/local).
+- Sprint summary in `STATUS.md`.
+
 ## Current State
 
 - Zig bootstrap interpreter (`bootstrap/main.zig`):

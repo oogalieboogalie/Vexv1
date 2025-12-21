@@ -1,7 +1,7 @@
 # Status
 
 ## Current Focus
-- Error reporting follow-ups: output validation.
+- Sprint 01: diagnostics & recovery hardening.
 
 ## Recently Done
 - Token stream carries line/col and dump prints positions.
@@ -14,9 +14,11 @@
 - Added a validation script for error output (`scripts/validate_vexc_errors.ps1`).
 - Added a function-header error demo (`examples/vexc_input_error_func.vex` + runner).
 - Added an eval error demo (`examples/vexc_input_eval_error.vex` + runner).
+- Expanded top-level recovery for malformed `fn` headers.
 
 ## Next Steps
-1) Expand error recovery around malformed function headers.
+1) Improve recovery for malformed parameter lists and bodies.
+2) Pick and port the next `compiler.vex` slice into vexc/Core.
 
 ## Commands
 - `zig build run -- eval examples/vexc_run_file_demo.vex`
