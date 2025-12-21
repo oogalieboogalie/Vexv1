@@ -21,6 +21,7 @@ Push-Location $root
 try {
     $text = Invoke-ZigEval "examples/vexc_run_error_demo.vex"
     $text2 = Invoke-ZigEval "examples/vexc_run_error_func_demo.vex"
+    $text3 = Invoke-ZigEval "examples/vexc_run_eval_error_demo.vex"
 } finally {
     Pop-Location
 }
@@ -53,8 +54,21 @@ $checks2 = @(
     @{ Name = "func_return"; Pattern = "returned 7" }
 )
 
+$checks3 = @(
+    @{ Name = "eval_error1"; Pattern = "\[vexc\] error: examples/vexc_input_eval_error\.vex: undefined var missing_var" },
+    @{ Name = "eval_error2"; Pattern = "\[vexc\] error: examples/vexc_input_eval_error\.vex: undefined function missing_fn" },
+    @{ Name = "eval_return"; Pattern = "returned 3" }
+)
+
 foreach ($check in $checks2) {
     if ($text2 -notmatch $check.Pattern) {
+        Write-Host "Missing expected output: $($check.Name)"
+        $failed = $true
+    }
+}
+
+foreach ($check in $checks3) {
+    if ($text3 -notmatch $check.Pattern) {
         Write-Host "Missing expected output: $($check.Name)"
         $failed = $true
     }
@@ -64,6 +78,7 @@ if ($failed) {
     Write-Host "Output was:"
     Write-Host $text
     Write-Host $text2
+    Write-Host $text3
     exit 1
 }
 

@@ -92,6 +92,7 @@ This is where we left off and where to go next.
       - `examples/vexc_run_import_example.vex` (runs `examples/import_main.vex` under vexc; exercises top-level `use "./file.vex"` imports)
       - `examples/vexc_run_error_demo.vex` (parses `examples/vexc_input_error.vex`; exercises error reporting and caret snippets)
       - `examples/vexc_run_error_func_demo.vex` (parses `examples/vexc_input_error_func.vex`; exercises function header recovery)
+      - `examples/vexc_run_eval_error_demo.vex` (runs `examples/vexc_input_eval_error.vex`; exercises eval-time error reporting)
    - (Added) `src/vexc/compiler_mini.vex` + `examples/vexc_run_compiler_mini.vex` to run the early `vex_tokenize` under vexc.
 
 ## How Close Are We To A "Nice" Language?

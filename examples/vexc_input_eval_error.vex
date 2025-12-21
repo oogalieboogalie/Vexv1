@@ -1,0 +1,7 @@
+fn main() {
+  let y = missing_var + 1
+  print(y)
+  let z = missing_fn(2)
+  print(z)
+  return 3
+}
