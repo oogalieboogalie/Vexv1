@@ -1,0 +1,8 @@
+fn (x) {
+  return x
+}
+
+fn bad(x)
+fn main() {
+  return 7
+}

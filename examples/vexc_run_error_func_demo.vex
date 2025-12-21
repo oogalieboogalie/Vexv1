@@ -1,0 +1,9 @@
+use "../src/vexc/eval.vex"
+
+fn main() {
+    print("[vexc] parsing examples/vexc_input_error_func.vex\n")
+    let token_cache = vexc_token_cache_create()
+    let prog = vexc_parse_program_file_cached("examples/vexc_input_error_func.vex", token_cache)
+    let v = vexc_eval_program_path(prog, "examples/vexc_input_error_func.vex")
+    print("returned {v}\n")
+}

@@ -78,13 +78,24 @@ fn vexc_sync_top(toks, pos) {
     return p
 }
 
+fn vexc_is_top_marker(k) {
+    if k == 6 { return 1 }
+    if k == 10 { return 1 }
+    if k == 41 { return 1 }
+    return 0
+}
+
 fn vexc_parse_func(toks, pos, is_accel, path, src) {
     // consume 'fn'
     if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
 
     let name = ""
     let name_k = vexc_tok_kind(toks, pos)
-    if name_k != 1 { vexc_error_at(toks, pos, path, src, "fn expects a name") }
+    if name_k != 1 {
+        vexc_error_at(toks, pos, path, src, "fn expects a name")
+        let pos = vexc_sync_top(toks, pos)
+        return vexc_pair(0, pos)
+    }
     if name_k == 1 {
         let name = vexc_tok_text(toks, pos)
         let pos = pos + 1
@@ -98,7 +109,7 @@ fn vexc_parse_func(toks, pos, is_accel, path, src) {
 
     if vexc_tok_kind(toks, pos) == 11 {
         let pos = pos + 1
-        while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 {
+        while vexc_tok_kind(toks, pos) != 12 and vexc_tok_kind(toks, pos) != 0 and vexc_tok_kind(toks, pos) != 13 {
             if vexc_tok_kind(toks, pos) == 1 {
                 if param_i == 0 { let p1 = vexc_tok_text(toks, pos) }
                 if param_i == 1 { let p2 = vexc_tok_text(toks, pos) }
@@ -113,9 +124,11 @@ fn vexc_parse_func(toks, pos, is_accel, path, src) {
         if close_k == 12 { let pos = pos + 1 }
     }
 
-    while vexc_tok_kind(toks, pos) != 13 and vexc_tok_kind(toks, pos) != 0 { let pos = pos + 1 }
+    while vexc_tok_kind(toks, pos) != 13 and vexc_tok_kind(toks, pos) != 0 and vexc_is_top_marker(vexc_tok_kind(toks, pos)) == 0 { let pos = pos + 1 }
     if vexc_tok_kind(toks, pos) != 13 {
         vexc_error_at(toks, pos, path, src, "expected '{' to start function body")
+        let pos = vexc_sync_top(toks, pos)
+        return vexc_pair(0, pos)
     }
     let br = vexc_parse_block(toks, pos, path, src)
     let body = vexc_pair_node(br)
@@ -168,19 +181,23 @@ fn vexc_parse_program_with_imports(toks, path, src, imports_seen, token_cache) {
 
         let is_accel = 0
         if vexc_tok_kind(toks, pos) == 10 {
-            let is_accel = 1
             let accel_pos = pos
             let pos = pos + 1
             if vexc_tok_kind(toks, pos) != 6 {
                 vexc_error_at(toks, accel_pos, path, src, "@accel must precede fn")
                 let pos = vexc_sync_top(toks, pos)
+                continue
             }
+            let is_accel = 1
         }
 
         if vexc_tok_kind(toks, pos) == 6 {
+            let start_pos = pos
             let fr = vexc_parse_func(toks, pos, is_accel, path, src)
-            list_push(funcs, vexc_pair_node(fr))
-            let pos = vexc_pair_pos(fr)
+            if vexc_pair_node(fr) != 0 { list_push(funcs, vexc_pair_node(fr)) }
+            let next_pos = vexc_pair_pos(fr)
+            if next_pos <= start_pos { let next_pos = start_pos + 1 }
+            let pos = next_pos
         }
 
         if vexc_tok_kind(toks, pos) != 6 {
