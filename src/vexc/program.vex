@@ -67,6 +67,17 @@ fn vexc_token_cache_get_src(path, token_cache) {
     return ""
 }
 
+fn vexc_sync_top(toks, pos) {
+    let p = pos
+    while 1 {
+        let k = vexc_tok_kind(toks, p)
+        if k == 0 { return p }
+        if k == 6 or k == 10 or k == 41 { return p }
+        let p = p + 1
+    }
+    return p
+}
+
 fn vexc_parse_func(toks, pos, is_accel, path, src) {
     // consume 'fn'
     if vexc_tok_kind(toks, pos) == 6 { let pos = pos + 1 }
@@ -130,11 +141,11 @@ fn vexc_parse_program_with_imports(toks, path, src, imports_seen, token_cache) {
         // use "./file.vex" (top-level include; merges functions into this program)
         if vexc_tok_kind(toks, pos) == 41 {
             let pos = pos + 1
-            if vexc_tok_kind(toks, pos) != 3 {
-                vexc_error_at(toks, pos, path, src, "use expects a string path")
-                let pos = pos + 1
-                continue
-            }
+        if vexc_tok_kind(toks, pos) != 3 {
+            vexc_error_at(toks, pos, path, src, "use expects a string path")
+            let pos = vexc_sync_top(toks, pos + 1)
+            continue
+        }
 
             let raw_path = vexc_strip_quotes(vexc_tok_text(toks, pos))
             let pos = pos + 1
@@ -162,6 +173,7 @@ fn vexc_parse_program_with_imports(toks, path, src, imports_seen, token_cache) {
             let pos = pos + 1
             if vexc_tok_kind(toks, pos) != 6 {
                 vexc_error_at(toks, accel_pos, path, src, "@accel must precede fn")
+                let pos = vexc_sync_top(toks, pos)
             }
         }
 

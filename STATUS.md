@@ -1,7 +1,7 @@
 # Status
 
 ## Current Focus
-- Error reporting follow-ups: recovery + output validation.
+- Error reporting follow-ups: output validation.
 
 ## Recently Done
 - Token stream carries line/col and dump prints positions.
@@ -10,10 +10,10 @@
 - Threaded `path` + `src` through vexc parse calls for consistent diagnostics.
 - Eval errors now include file path when provided (`vexc_eval_program_path`).
 - Added a parse error demo (`examples/vexc_input_error.vex` + runner).
+- Added simple parser recovery (sync to next stmt/top-level marker after errors).
 
 ## Next Steps
-1) Add simple error recovery (skip to next `fn` or `}` after an error).
-2) Add tests or a short script to validate error output format.
+1) Add tests or a short script to validate error output format.
 
 ## Commands
 - `zig build run -- eval examples/vexc_run_file_demo.vex`

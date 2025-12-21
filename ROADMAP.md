@@ -44,6 +44,7 @@ This is where we left off and where to go next.
   - Token cache avoids re-tokenizing unchanged files across repeated parses (`vexc_parse_program_file_cached`).
   - Token stream carries line/col; parser emits basic location errors (missing delimiters, bad `use`, stray `@accel`) with file/line/col and caret snippets when source is available.
   - Eval errors include file path when provided (`vexc_eval_program_path`).
+  - Basic error recovery syncs to the next statement/top-level marker after some parse errors.
   - `src/vexc/compiler_mini.vex` ports the early `vex_tokenize` and now handles strings and `- * / == != ;` (demo: `examples/vexc_input_compiler_mini_src.vex`).
 
 ## Near-Term Goals

@@ -17,6 +17,41 @@ fn vexc_make_block(stmts) {
     return b
 }
 
+fn vexc_make_noop_stmt() {
+    let expr = list_create()
+    list_push(expr, 300)
+    list_push(expr, 0)
+    let node = list_create()
+    list_push(node, 205)
+    list_push(node, expr)
+    return node
+}
+
+fn vexc_is_stmt_start(k) {
+    if k == 4 { return 1 } // let
+    if k == 5 { return 1 } // print
+    if k == 7 { return 1 } // return
+    if k == 8 { return 1 } // if
+    if k == 9 { return 1 } // while
+    if k == 34 { return 1 } // for
+    if k == 39 { return 1 } // break
+    if k == 40 { return 1 } // continue
+    if k == 13 { return 1 } // {
+    if k == 1 { return 1 } // ident
+    return 0
+}
+
+fn vexc_sync_stmt(toks, pos) {
+    let p = pos
+    while 1 {
+        let k = vexc_tok_kind(toks, p)
+        if k == 0 or k == 14 { return p }
+        if vexc_is_stmt_start(k) != 0 { return p }
+        let p = p + 1
+    }
+    return p
+}
+
 fn vexc_parse_block(toks, pos, path, src) {
     let stmts = list_create()
     let opened = 0
@@ -28,7 +63,9 @@ fn vexc_parse_block(toks, pos, path, src) {
     while vexc_tok_kind(toks, pos) != 14 and vexc_tok_kind(toks, pos) != 0 {
         let r = vexc_parse_stmt(toks, pos, path, src)
         list_push(stmts, vexc_pair_node(r))
-        let pos = vexc_pair_pos(r)
+        let next_pos = vexc_pair_pos(r)
+        if next_pos <= pos { let next_pos = pos + 1 }
+        let pos = next_pos
     }
 
     let has_close = 0
@@ -61,6 +98,7 @@ fn vexc_parse_stmt(toks, pos, path, src) {
         let close_k = vexc_tok_kind(toks, pos)
         if had_paren != 0 and close_k != 12 {
             vexc_error_at(toks, pos, path, src, "expected ')' after print expr")
+            let pos = vexc_sync_stmt(toks, pos)
         }
         if close_k == 12 { let pos = pos + 1 }
 
@@ -75,6 +113,8 @@ fn vexc_parse_stmt(toks, pos, path, src) {
         let name = ""
         if vexc_tok_kind(toks, pos + 1) != 1 {
             vexc_error_at(toks, pos + 1, path, src, "let expects identifier")
+            let pos = vexc_sync_stmt(toks, pos + 1)
+            return vexc_pair(vexc_make_noop_stmt(), pos)
         }
         if vexc_tok_kind(toks, pos + 1) == 1 { let name = vexc_tok_text(toks, pos + 1) }
 
@@ -88,6 +128,8 @@ fn vexc_parse_stmt(toks, pos, path, src) {
         }
         if saw_equal == 0 {
             vexc_error_at(toks, pos, path, src, "let expects '='")
+            let pos = vexc_sync_stmt(toks, pos)
+            return vexc_pair(vexc_make_noop_stmt(), pos)
         }
 
         let r = vexc_parse_expr(toks, pos, path, src)
@@ -141,12 +183,16 @@ fn vexc_parse_stmt(toks, pos, path, src) {
         let name = ""
         if vexc_tok_kind(toks, pos) != 1 {
             vexc_error_at(toks, pos, path, src, "for expects identifier")
+            let pos = vexc_sync_stmt(toks, pos)
+            return vexc_pair(vexc_make_noop_stmt(), pos)
         }
         if vexc_tok_kind(toks, pos) == 1 { let name = vexc_tok_text(toks, pos) }
 
         if vexc_tok_kind(toks, pos) == 1 { let pos = pos + 1 }
         if vexc_tok_kind(toks, pos) != 35 {
             vexc_error_at(toks, pos, path, src, "for expects 'in'")
+            let pos = vexc_sync_stmt(toks, pos)
+            return vexc_pair(vexc_make_noop_stmt(), pos)
         }
         if vexc_tok_kind(toks, pos) == 35 { let pos = pos + 1 }
 
@@ -156,6 +202,8 @@ fn vexc_parse_stmt(toks, pos, path, src) {
 
         if vexc_tok_kind(toks, pos) != 36 {
             vexc_error_at(toks, pos, path, src, "for expects '..'")
+            let pos = vexc_sync_stmt(toks, pos)
+            return vexc_pair(vexc_make_noop_stmt(), pos)
         }
         if vexc_tok_kind(toks, pos) == 36 { let pos = pos + 1 }
 
@@ -228,7 +276,11 @@ fn vexc_parse_stmt(toks, pos, path, src) {
             let idx_expr = vexc_pair_node(ir)
             let pos = vexc_pair_pos(ir)
             let close_k = vexc_tok_kind(toks, pos)
-            if close_k != 38 { vexc_error_at(toks, pos, path, src, "expected ']'") }
+            if close_k != 38 {
+                vexc_error_at(toks, pos, path, src, "expected ']'")
+                let pos = vexc_sync_stmt(toks, pos)
+                return vexc_pair(vexc_make_noop_stmt(), pos)
+            }
             if close_k == 38 { let pos = pos + 1 }
 
             let op = vexc_tok_kind(toks, pos)
