@@ -6,14 +6,130 @@ use "./program.vex"
 // Return/control pair.
 // kind: 0=none, 1=return, 2=break, 3=continue
 fn vexc_res(kind, value) {
+    if kind == 0 { return 0 }
     let r = list_create()
     list_push(r, kind)
     list_push(r, value)
     return r
 }
 
-fn vexc_res_has(r) { return list_get(r, 0) }
-fn vexc_res_val(r) { return list_get(r, 1) }
+fn vexc_res_has(r) {
+    if r == 0 { return 0 }
+    return list_get(r, 0)
+}
+
+fn vexc_res_val(r) {
+    if r == 0 { return 0 }
+    return list_get(r, 1)
+}
+
+fn vexc_prof_create(budget) {
+    let state = list_create()
+    let builtin_counts = env_create(0)
+    let builtin_keys = list_create()
+    let func_counts = env_create(0)
+    let func_keys = list_create()
+    list_push(state, builtin_counts)
+    list_push(state, builtin_keys)
+    list_push(state, func_counts)
+    list_push(state, func_keys)
+    list_push(state, 0) // expr_calls
+    list_push(state, 0) // stmt_calls
+    list_push(state, 0) // builtin_calls
+    list_push(state, 0) // func_calls
+    list_push(state, budget)
+    list_push(state, 0) // stop flag
+    return state
+}
+
+fn vexc_prof_inc(state, idx) {
+    if state == 0 { return 0 }
+    let cur = list_get(state, idx)
+    list_set(state, idx, cur + 1)
+    return 0
+}
+
+fn vexc_prof_hit(state, env_idx, keys_idx, name) {
+    if state == 0 { return 0 }
+    let counts = list_get(state, env_idx)
+    let keys = list_get(state, keys_idx)
+    let cur = env_find(counts, name)
+    if cur == 0 {
+        list_push(keys, name)
+        env_set(counts, name, 1)
+        return 0
+    }
+    env_set(counts, name, cur + 1)
+    return 0
+}
+
+fn vexc_prof_step_expr(state) {
+    if state == 0 { return 0 }
+    vexc_prof_inc(state, 4)
+    let budget = list_get(state, 8)
+    if budget != 0 {
+        let count = list_get(state, 4)
+        if count >= budget and list_get(state, 9) == 0 { list_set(state, 9, 1) }
+    }
+    return 0
+}
+
+fn vexc_prof_step_stmt(state) { return vexc_prof_inc(state, 5) }
+
+fn vexc_prof_hit_builtin(state, name) {
+    if state == 0 { return 0 }
+    vexc_prof_hit(state, 0, 1, name)
+    return vexc_prof_inc(state, 6)
+}
+
+fn vexc_prof_hit_func(state, name) {
+    if state == 0 { return 0 }
+    vexc_prof_hit(state, 2, 3, name)
+    return vexc_prof_inc(state, 7)
+}
+
+fn vexc_prof_should_stop(state) {
+    if state == 0 { return 0 }
+    return list_get(state, 9)
+}
+
+fn vexc_prof_report(state) {
+    if state == 0 { return 0 }
+    let expr_calls = list_get(state, 4)
+    let stmt_calls = list_get(state, 5)
+    let builtin_calls = list_get(state, 6)
+    let func_calls = list_get(state, 7)
+    let budget = list_get(state, 8)
+    let stopped = list_get(state, 9)
+
+    print("[vexc] profile expr_calls {expr_calls}\n")
+    print("[vexc] profile stmt_calls {stmt_calls}\n")
+    print("[vexc] profile builtin_calls {builtin_calls}\n")
+    print("[vexc] profile func_calls {func_calls}\n")
+    if budget != 0 and stopped != 0 { print("[vexc] profile stopped at budget {budget}\n") }
+
+    let builtin_counts = list_get(state, 0)
+    let builtin_keys = list_get(state, 1)
+    let i = 0
+    while i < list_len(builtin_keys) {
+        let name = list_get(builtin_keys, i)
+        let count = env_find(builtin_counts, name)
+        print("[vexc] builtin {count} {name}\n")
+        let i = i + 1
+    }
+
+    let func_counts = list_get(state, 2)
+    let func_keys = list_get(state, 3)
+    let j = 0
+    while j < list_len(func_keys) {
+        let name = list_get(func_keys, j)
+        let count = env_find(func_counts, name)
+        print("[vexc] func {count} {name}\n")
+        let j = j + 1
+    }
+
+    return 0
+}
 
 fn vexc_error_eval(path, msg) {
     if str_len(path) != 0 {
@@ -61,7 +177,7 @@ fn vexc_parse_int(s) {
     return v
 }
 
-fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path, prog_args) {
+fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path, prog_args, prof_state) {
     let i = 0
     let n = str_len(raw)
     while i < n {
@@ -121,7 +237,7 @@ fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path, prog_args) {
                     list_push(call_node, 304)
                     list_push(call_node, name)
                     list_push(call_node, args)
-                    let v = vexc_eval_expr(call_node, funcs_env, vals_env, defs_env, path, prog_args)
+                    let v = vexc_eval_expr(call_node, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
                     print(v)
                 }
 
@@ -148,10 +264,11 @@ fn vexc_render_string(funcs_env, vals_env, defs_env, raw, path, prog_args) {
 
         if c != 123 {
             let handled = 0
-            if c == 92 and (i + 1) < n and str_char(raw, i + 1) == 110 {
-                print_char(10)
-                let i = i + 2
-                let handled = 1
+            if c == 92 and (i + 1) < n {
+                let esc = str_char(raw, i + 1)
+                if esc == 110 { print_char(10); let i = i + 2; let handled = 1 } // \n
+                if handled == 0 and esc == 34 { print_char(34); let i = i + 2; let handled = 1 } // \"
+                if handled == 0 and esc == 92 { print_char(92); let i = i + 2; let handled = 1 } // \\
             }
             if handled == 0 {
                 print_char(c)
@@ -171,7 +288,9 @@ fn vexc_env_get(vals_env, defs_env, name, path, prog_args) {
     return env_find(vals_env, name)
 }
 
-fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) {
+fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state) {
+    vexc_prof_step_expr(prof_state)
+    if vexc_prof_should_stop(prof_state) != 0 { return 0 }
     let tag = list_get(expr, 0)
 
     if tag == 300 { return list_get(expr, 1) }
@@ -184,8 +303,8 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) {
 
     if tag == 303 {
         let op = list_get(expr, 1)
-        let left = vexc_eval_expr(list_get(expr, 2), funcs_env, vals_env, defs_env, path, prog_args)
-        let right = vexc_eval_expr(list_get(expr, 3), funcs_env, vals_env, defs_env, path, prog_args)
+        let left = vexc_eval_expr(list_get(expr, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+        let right = vexc_eval_expr(list_get(expr, 3), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         if op == 18 { return left + right }
         if op == 19 { return left - right }
         if op == 20 { return left * right }
@@ -230,100 +349,599 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) {
         let arg_exprs = list_get(expr, 2)
 
         let argc = list_len(arg_exprs)
-        let args = list_create()
-        let i = 0
-        while i < argc {
-            list_push(args, vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args))
-            let i = i + 1
-        }
-
         // Builtins
         if name == "env_create" {
+            vexc_prof_hit_builtin(prof_state, name)
             let parent = 0
-            if argc > 0 { let parent = list_get(args, 0) }
+            if argc > 0 { let parent = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             return env_create(parent)
         }
         if name == "env_set" {
+            vexc_prof_hit_builtin(prof_state, name)
             let envh = 0
             let key = ""
             let val = 0
-            if argc > 0 { let envh = list_get(args, 0) }
-            if argc > 1 { let key = list_get(args, 1) }
-            if argc > 2 { let val = list_get(args, 2) }
+            if argc > 0 { let envh = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let key = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 2 { let val = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 3
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             env_set(envh, key, val)
             return 0
         }
         if name == "env_find" {
+            vexc_prof_hit_builtin(prof_state, name)
             let envh = 0
             let key = ""
-            if argc > 0 { let envh = list_get(args, 0) }
-            if argc > 1 { let key = list_get(args, 1) }
+            if argc > 0 { let envh = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let key = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             return env_find(envh, key)
         }
 
         if name == "str_len" {
-            if argc > 0 { return str_len(list_get(args, 0)) }
-            return 0
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 0 { let out = str_len(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
         if name == "str_char" {
-            if argc > 1 { return str_char(list_get(args, 0), list_get(args, 1)) }
-            return 0
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let idx = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = str_char(s, idx)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
         if name == "str_slice" {
-            if argc > 2 { return str_slice(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
-            return ""
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = ""
+            if argc > 2 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let end = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = str_slice(s, start, end)
+            }
+            let i = 0
+            if argc > 2 { let i = 3 }
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "str_eq" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let a = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let b = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = str_eq(a, b)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+
+        if name == "consume_digits" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = consume_digits(s, start)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "consume_ident" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = consume_ident(s, start)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "skip_line_comment" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = skip_line_comment(s, start)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+
+        if name == "vexc_consume_digits" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 2 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let limit = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = vexc_consume_digits(s, start, limit)
+            }
+            let i = 0
+            if argc > 2 { let i = 3 }
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "vexc_consume_ident" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 2 {
+                let s = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let start = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let limit = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = vexc_consume_ident(s, start, limit)
+            }
+            let i = 0
+            if argc > 2 { let i = 3 }
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "vexc_tokenize_native" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 0 { let out = vexc_tokenize_native(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "lex_tokenize_native" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 0 { let out = lex_tokenize_native(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+        if name == "lex_tokenize_native_pos" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 0 { let out = lex_tokenize_native_pos(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
 
         if name == "print_bytes" {
-            if argc > 0 { print_bytes(list_get(args, 0)) }
+            vexc_prof_hit_builtin(prof_state, name)
+            if argc > 0 { print_bytes(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             return 0
         }
         if name == "print_char" {
-            if argc > 0 { print_char(list_get(args, 0)) }
+            vexc_prof_hit_builtin(prof_state, name)
+            if argc > 0 { print_char(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             return 0
         }
 
-        if name == "list_create" { return list_create() }
+        if name == "list_create" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let i = 0
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return list_create()
+        }
         if name == "list_push" {
-            if argc > 1 { list_push(list_get(args, 0), list_get(args, 1)) }
+            vexc_prof_hit_builtin(prof_state, name)
+            let list_handle = 0
+            let val = 0
+            if argc > 0 { let list_handle = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let val = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            if argc > 1 { list_push(list_handle, val) }
             return 0
         }
         if name == "list_len" {
-            if argc > 0 { return list_len(list_get(args, 0)) }
-            return 0
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 0 { let out = list_len(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
         if name == "list_get" {
-            if argc > 1 { return list_get(list_get(args, 0), list_get(args, 1)) }
-            return 0
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            if argc > 1 {
+                let list_handle = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let idx = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = list_get(list_handle, idx)
+            }
+            if argc == 1 {
+                _ = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+            }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
         if name == "list_set" {
-            if argc > 2 { list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+            vexc_prof_hit_builtin(prof_state, name)
+            let list_handle = 0
+            let idx = 0
+            let val = 0
+            if argc > 0 { let list_handle = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let idx = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 2 { let val = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 3
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            if argc > 2 { list_set(list_handle, idx, val) }
             return 0
         }
 
         if name == "read_file" {
-            if argc > 0 { return read_file(list_get(args, 0)) }
-            return ""
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = ""
+            if argc > 0 { let out = read_file(vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
         }
         if name == "write_file" {
-            if argc > 1 { write_file(list_get(args, 0), list_get(args, 1)) }
+            vexc_prof_hit_builtin(prof_state, name)
+            let path2 = ""
+            let data2 = ""
+            if argc > 0 { let path2 = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let data2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            if argc > 1 { write_file(path2, data2) }
             return 0
         }
-
         if name == "path_join" {
-            if argc > 1 { return path_join(list_get(args, 0), list_get(args, 1)) }
-            return ""
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = ""
+            if argc > 1 {
+                let a = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let b = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let out = path_join(a, b)
+            }
+            let i = 0
+            if argc > 1 { let i = 2 }
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return out
+        }
+
+        if name == "bc_save" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let bc_funcs = 0
+            let out_path = ""
+            if argc > 0 { let bc_funcs = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let out_path = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            if argc > 1 { bc_save(bc_funcs, out_path) }
+            return 0
+        }
+        if name == "bc_run" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let out = 0
+            let bc_funcs = 0
+            let args2 = 0
+            if argc > 0 { let bc_funcs = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let args2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            if argc > 1 { let out = bc_run(bc_funcs, args2) }
+            if argc == 1 { let out = bc_run(bc_funcs, 0) }
+            return out
         }
 
         if name == "arg_len" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let i = 0
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
             return list_len(prog_args)
         }
         if name == "arg_get" {
-            if argc > 0 {
-                let idx = list_get(args, 0)
-                let n = list_len(prog_args)
-                if idx < n { return list_get(prog_args, idx) }
+            vexc_prof_hit_builtin(prof_state, name)
+            let idx = 0
+            if argc > 0 { let idx = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
             }
+            let n = list_len(prog_args)
+            if idx < n { return list_get(prog_args, idx) }
+            return 0
+        }
+
+        // Hot compiler_core helpers (override user-defined versions for speed).
+        if name == "tok_kind" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let toks = 0
+            let pos2 = 0
+            if argc > 0 { let toks = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let pos2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return list_get(toks, pos2 * 4)
+        }
+        if name == "tok_text" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let toks = 0
+            let pos2 = 0
+            if argc > 0 { let toks = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let pos2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let idx = pos2 * 4 + 1
+            if idx < list_len(toks) { return list_get(toks, idx) }
+            return ""
+        }
+        if name == "tok_line" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let toks = 0
+            let pos2 = 0
+            if argc > 0 { let toks = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let pos2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let idx = pos2 * 4 + 2
+            if idx < list_len(toks) { return list_get(toks, idx) }
+            return 1
+        }
+        if name == "tok_col" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let toks = 0
+            let pos2 = 0
+            if argc > 0 { let toks = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let pos2 = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let idx = pos2 * 4 + 3
+            if idx < list_len(toks) { return list_get(toks, idx) }
+            return 1
+        }
+
+        if name == "pair" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let a = 0
+            let b = 0
+            if argc > 0 { let a = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let b = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let p = list_create()
+            list_push(p, a)
+            list_push(p, b)
+            return p
+        }
+        if name == "pair_node" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let p = 0
+            if argc > 0 { let p = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return list_get(p, 0)
+        }
+        if name == "pair_pos" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let p = 0
+            if argc > 0 { let p = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            return list_get(p, 1)
+        }
+
+        // Hot bytecode compiler helpers.
+        if name == "bc_ins0" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let op = 0
+            if argc > 0 { let op = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 1
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let ins = list_create()
+            list_push(ins, op)
+            return ins
+        }
+        if name == "bc_ins1" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let op = 0
+            let a = 0
+            if argc > 0 { let op = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let a = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let ins = list_create()
+            list_push(ins, op)
+            list_push(ins, a)
+            return ins
+        }
+        if name == "bc_ins2" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let op = 0
+            let a = 0
+            let b = 0
+            if argc > 0 { let op = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let a = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 2 { let b = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 3
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let ins = list_create()
+            list_push(ins, op)
+            list_push(ins, a)
+            list_push(ins, b)
+            return ins
+        }
+        if name == "bc_emit" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let code = 0
+            let ins = 0
+            if argc > 0 { let code = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let ins = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 2
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            list_push(code, ins)
+            return list_len(code) - 1
+        }
+        if name == "bc_patch_target" {
+            vexc_prof_hit_builtin(prof_state, name)
+            let code = 0
+            let ins_idx = 0
+            let target = 0
+            if argc > 0 { let code = vexc_eval_expr(list_get(arg_exprs, 0), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 1 { let ins_idx = vexc_eval_expr(list_get(arg_exprs, 1), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            if argc > 2 { let target = vexc_eval_expr(list_get(arg_exprs, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+            let i = 3
+            while i < argc {
+                _ = vexc_eval_expr(list_get(arg_exprs, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+                let i = i + 1
+            }
+            let ins = list_get(code, ins_idx)
+            list_set(ins, 1, target)
             return 0
         }
 
@@ -333,26 +951,29 @@ fn vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) {
             return 0
         }
 
-        return vexc_call_user_func(f, args, funcs_env, vals_env, defs_env, path, prog_args)
+        vexc_prof_hit_func(prof_state, name)
+        return vexc_call_user_func(f, arg_exprs, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
     }
 
     return 0
 }
 
-fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
+fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args, prof_state) {
+    vexc_prof_step_stmt(prof_state)
+    if vexc_prof_should_stop(prof_state) != 0 { return vexc_res(0, 0) }
     let tag = list_get(stmt, 0)
 
     if tag == 102 {
-        return vexc_eval_block(stmt, funcs_env, vals_env, defs_env, path, prog_args)
+        return vexc_eval_block(stmt, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
     }
 
     if tag == 201 {
         let expr = list_get(stmt, 1)
         if list_get(expr, 0) == 301 {
-            vexc_render_string(funcs_env, vals_env, defs_env, list_get(expr, 1), path, prog_args)
+            vexc_render_string(funcs_env, vals_env, defs_env, list_get(expr, 1), path, prog_args, prof_state)
         }
         if list_get(expr, 0) != 301 {
-            let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
+            let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
             print(v)
         }
         return vexc_res(0, 0)
@@ -361,7 +982,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
     if tag == 200 {
         let name = list_get(stmt, 1)
         let expr = list_get(stmt, 2)
-        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
+        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         env_set(vals_env, name, v)
         env_set(defs_env, name, 1)
         return vexc_res(0, 0)
@@ -371,7 +992,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
         let op = list_get(stmt, 1)
         let name = list_get(stmt, 2)
         let expr = list_get(stmt, 3)
-        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
+        let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
 
         if op == 30 {
             let base = vexc_env_get(vals_env, defs_env, name, path, prog_args)
@@ -386,8 +1007,8 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
     if tag == 208 {
         let op = list_get(stmt, 1)
         let name = list_get(stmt, 2)
-        let idx = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args)
-        let rhs = vexc_eval_expr(list_get(stmt, 4), funcs_env, vals_env, defs_env, path, prog_args)
+        let idx = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+        let rhs = vexc_eval_expr(list_get(stmt, 4), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         let list_handle = vexc_env_get(vals_env, defs_env, name, path, prog_args)
 
         let out = rhs
@@ -402,7 +1023,7 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
     if tag == 202 {
         let expr = list_get(stmt, 1)
         let v = 0
-        if expr != 0 { let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args) }
+        if expr != 0 { let v = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
         return vexc_res(1, v)
     }
 
@@ -413,29 +1034,31 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
         let cond = list_get(stmt, 1)
         let body = list_get(stmt, 2)
 
-        while vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args) != 0 {
-            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
+        while vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args, prof_state) != 0 {
+            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
             let k = vexc_res_has(r)
             if k == 1 { return r }
-            if k == 2 { return vexc_res(0, 0) }
+            if k == 2 { if r != 0 { list_destroy(r) }; return vexc_res(0, 0) }
+            if k == 3 { if r != 0 { list_destroy(r) } }
         }
         return vexc_res(0, 0)
     }
 
     if tag == 207 {
         let name = list_get(stmt, 1)
-        let start = vexc_eval_expr(list_get(stmt, 2), funcs_env, vals_env, defs_env, path, prog_args)
-        let end = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args)
+        let start = vexc_eval_expr(list_get(stmt, 2), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+        let end = vexc_eval_expr(list_get(stmt, 3), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         let body = list_get(stmt, 4)
         while start < end {
             if str_len(name) != 0 {
                 env_set(vals_env, name, start)
                 env_set(defs_env, name, 1)
             }
-            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
+            let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
             let k = vexc_res_has(r)
             if k == 1 { return r }
-            if k == 2 { return vexc_res(0, 0) }
+            if k == 2 { if r != 0 { list_destroy(r) }; return vexc_res(0, 0) }
+            if k == 3 { if r != 0 { list_destroy(r) } }
             let start = start + 1
         }
         return vexc_res(0, 0)
@@ -445,15 +1068,15 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
         let cond = list_get(stmt, 1)
         let then_block = list_get(stmt, 2)
         let else_block = list_get(stmt, 3)
-        let c = vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args)
-        if c != 0 { return vexc_eval_block(then_block, funcs_env, vals_env, defs_env, path, prog_args) }
-        if else_block != 0 { return vexc_eval_block(else_block, funcs_env, vals_env, defs_env, path, prog_args) }
+        let c = vexc_eval_expr(cond, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
+        if c != 0 { return vexc_eval_block(then_block, funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
+        if else_block != 0 { return vexc_eval_block(else_block, funcs_env, vals_env, defs_env, path, prog_args, prof_state) }
         return vexc_res(0, 0)
     }
 
     if tag == 205 {
         let expr = list_get(stmt, 1)
-        _ = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args)
+        _ = vexc_eval_expr(expr, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         return vexc_res(0, 0)
     }
 
@@ -461,18 +1084,19 @@ fn vexc_eval_stmt(stmt, funcs_env, vals_env, defs_env, path, prog_args) {
     return vexc_res(0, 0)
 }
 
-fn vexc_eval_block(block, funcs_env, vals_env, defs_env, path, prog_args) {
+fn vexc_eval_block(block, funcs_env, vals_env, defs_env, path, prog_args, prof_state) {
     let stmts = list_get(block, 1)
     let i = 0
     while i < list_len(stmts) {
-        let r = vexc_eval_stmt(list_get(stmts, i), funcs_env, vals_env, defs_env, path, prog_args)
+        if vexc_prof_should_stop(prof_state) != 0 { return vexc_res(0, 0) }
+        let r = vexc_eval_stmt(list_get(stmts, i), funcs_env, vals_env, defs_env, path, prog_args, prof_state)
         if vexc_res_has(r) != 0 { return r }
         let i = i + 1
     }
     return vexc_res(0, 0)
 }
 
-fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, path, prog_args) {
+fn vexc_call_user_func(func_node, arg_exprs, funcs_env, caller_vals, caller_defs, path, prog_args, prof_state) {
     let parent_vals = caller_vals
     let parent_defs = caller_defs
 
@@ -480,27 +1104,35 @@ fn vexc_call_user_func(func_node, args, funcs_env, caller_vals, caller_defs, pat
     let defs_env = env_create(parent_defs)
 
     let params = list_get(func_node, 7)
-    let argc = list_len(args)
+    let argc = list_len(arg_exprs)
     let pi = 0
     while pi < list_len(params) and pi < argc {
         let name = list_get(params, pi)
-        env_set(vals_env, name, list_get(args, pi))
+        let v = vexc_eval_expr(list_get(arg_exprs, pi), funcs_env, caller_vals, caller_defs, path, prog_args, prof_state)
+        env_set(vals_env, name, v)
         env_set(defs_env, name, 1)
+        let pi = pi + 1
+    }
+    while pi < argc {
+        _ = vexc_eval_expr(list_get(arg_exprs, pi), funcs_env, caller_vals, caller_defs, path, prog_args, prof_state)
         let pi = pi + 1
     }
 
     let body = list_get(func_node, 6)
-    let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args)
+    let r = vexc_eval_block(body, funcs_env, vals_env, defs_env, path, prog_args, prof_state)
     let k = vexc_res_has(r)
-    if k == 1 { return vexc_res_val(r) }
-    if k != 0 {
+    let out = 0
+    if k == 1 { let out = vexc_res_val(r) }
+    if k != 0 and k != 1 {
         vexc_error_eval(path, "break/continue escaped function")
-        return 0
     }
-    return 0
+    if r != 0 { list_destroy(r) }
+    env_destroy(vals_env)
+    env_destroy(defs_env)
+    return out
 }
 
-fn vexc_eval_program_path_args(prog, path, prog_args) {
+fn vexc_eval_program_path_args_inner(prog, path, prog_args, prof_state) {
     let tag = list_get(prog, 0)
     if tag != 100 {
         vexc_error_eval(path, "expected program")
@@ -526,17 +1158,35 @@ fn vexc_eval_program_path_args(prog, path, prog_args) {
 
     let vals = env_create()
     let defs = env_create()
-    let args = list_create()
-    return vexc_call_user_func(mainf, args, funcs_env, vals, defs, path, prog_args)
+    let out = vexc_call_user_func(mainf, 0, funcs_env, vals, defs, path, prog_args, prof_state)
+    env_destroy(funcs_env)
+    env_destroy(vals)
+    env_destroy(defs)
+    return out
+}
+
+fn vexc_eval_program_path_args_profile_budget(prog, path, prog_args, budget) {
+    let prof_state = vexc_prof_create(budget)
+    let v = vexc_eval_program_path_args_inner(prog, path, prog_args, prof_state)
+    vexc_prof_report(prof_state)
+    return v
+}
+
+fn vexc_eval_program_path_args_profile(prog, path, prog_args) {
+    return vexc_eval_program_path_args_profile_budget(prog, path, prog_args, 0)
+}
+
+fn vexc_eval_program_path_args(prog, path, prog_args) {
+    return vexc_eval_program_path_args_inner(prog, path, prog_args, 0)
 }
 
 fn vexc_eval_program_path(prog, path) {
     let prog_args = list_create()
     if str_len(path) != 0 { list_push(prog_args, path) }
-    return vexc_eval_program_path_args(prog, path, prog_args)
+    return vexc_eval_program_path_args_inner(prog, path, prog_args, 0)
 }
 
 fn vexc_eval_program(prog) {
     let prog_args = list_create()
-    return vexc_eval_program_path_args(prog, "", prog_args)
+    return vexc_eval_program_path_args_inner(prog, "", prog_args, 0)
 }

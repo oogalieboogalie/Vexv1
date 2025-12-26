@@ -37,6 +37,9 @@ Prereq: Zig `0.13.x` installed (`zig` on your PATH). This repo does not vendor Z
 - Vex-in-Vex runs dot syntax (`examples/dot.vex`): `zig build run -- eval examples/vexc_run_dot_example.vex`
 - Vex-in-Vex runs imports (`examples/import_main.vex`): `zig build run -- eval examples/vexc_run_import_example.vex`
 - Self-host proof (compiled compiler runs itself): `zig build run -- bc src/compiler_core.vex eval examples/hello.vex`
+- Vex-in-Vex runs compiler_core self-host (slow): `zig build run -- examples/vexc_run_compiler_core_selfhost_demo.vex go`
+- Vex-in-Vex writes a self-hosted bytecode artifact (slow): `zig build run -- examples/vexc_run_compiler_core_bcsave_selfhost_demo.vex go`
+- Self-host fixed point check (stage-2 via vexc, stage-3 via bytecode): `powershell -ExecutionPolicy Bypass -File scripts/selfhost_fixed_point.ps1`
 - Varargs demo (5-arg function): `zig build run -- examples/varargs.vex` and `zig build run -- eval examples/varargs.vex`
 - Dot demo (`obj.field` + `.name`): `zig build run -- examples/dot.vex` and `zig build run -- eval examples/dot.vex`
 - Assignment + literals demo (`=`, `+=`, `true/false/null`): `zig build run -- examples/assign.vex` and `zig build run -- eval examples/assign.vex`

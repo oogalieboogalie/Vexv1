@@ -19,27 +19,21 @@ fn vexc_pair_node(p) { return list_get(p, 0) }
 fn vexc_pair_pos(p) { return list_get(p, 1) }
 
 fn vexc_tok_kind(toks, pos) {
-    let idx = pos * 4
-    if idx < list_len(toks) { return list_get(toks, idx) }
-    return 0
+    return list_get(toks, pos * 4)
 }
 
 fn vexc_tok_text(toks, pos) {
-    let idx = pos * 4 + 1
-    if idx < list_len(toks) { return list_get(toks, idx) }
-    return ""
+    let v = list_get(toks, pos * 4 + 1)
+    if v == 0 { return "" }
+    return v
 }
 
 fn vexc_tok_line(toks, pos) {
-    let idx = pos * 4 + 2
-    if idx < list_len(toks) { return list_get(toks, idx) }
-    return 0
+    return list_get(toks, pos * 4 + 2)
 }
 
 fn vexc_tok_col(toks, pos) {
-    let idx = pos * 4 + 3
-    if idx < list_len(toks) { return list_get(toks, idx) }
-    return 0
+    return list_get(toks, pos * 4 + 3)
 }
 
 fn vexc_line_slice(src, target_line) {

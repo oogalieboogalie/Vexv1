@@ -1,0 +1,17 @@
+use "../src/vexc/eval.vex"
+
+fn main() {
+    print("[vexc] running compiler_core_parse profile\n")
+    let token_cache = vexc_token_cache_create()
+    let prog = vexc_parse_program_file_cached_fast("src/compiler_core_parse.vex", token_cache)
+    print("[vexc] parsed compiler_core_parse\n")
+
+    let args = list_create()
+    list_push(args, "vex")
+    list_push(args, "parse")
+    list_push(args, "examples/hello.vex")
+
+    let budget = 50000
+    let v = vexc_eval_program_path_args_profile_budget(prog, "src/compiler_core_parse.vex", args, budget)
+    print("\nreturned {v}\n")
+}

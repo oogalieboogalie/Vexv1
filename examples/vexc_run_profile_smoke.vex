@@ -1,0 +1,13 @@
+use "../src/vexc/eval.vex"
+
+fn main() {
+    print("[vexc] running profile smoke\n")
+    let token_cache = vexc_token_cache_create()
+    let prog = vexc_parse_program_file_cached("examples/vexc_input_sum.vex", token_cache)
+
+    let args = list_create()
+    list_push(args, "examples/vexc_input_sum.vex")
+
+    let v = vexc_eval_program_path_args_profile_budget(prog, "examples/vexc_input_sum.vex", args, 5000)
+    print("\nreturned {v}\n")
+}

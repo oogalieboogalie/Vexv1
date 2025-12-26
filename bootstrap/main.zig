@@ -95,6 +95,14 @@ fn builtinEnvFind(env_handle: Value, key: []const u8) ?Value {
     return null;
 }
 
+fn builtinEnvDestroy(env_handle: Value) void {
+    if (isZeroInt(env_handle)) return;
+    const addr = @as(usize, @intCast(expectInt(env_handle)));
+    const env_ptr = @as(*KVEnv, @ptrFromInt(addr));
+    env_ptr.map.deinit();
+    allocator.destroy(env_ptr);
+}
+
 fn builtinPrintBytes(bytes: []const u8) void {
     print("{s}", .{bytes});
 }
@@ -157,6 +165,14 @@ fn builtinListSet(list_handle: Value, idx_value: Value, value: Value) void {
     }
 }
 
+fn builtinListDestroy(list_handle: Value) void {
+    if (isZeroInt(list_handle)) return;
+    const addr = @as(usize, @intCast(expectInt(list_handle)));
+    const list_ptr = @as(*VexList, @ptrFromInt(addr));
+    list_ptr.items.deinit();
+    allocator.destroy(list_ptr);
+}
+
 fn builtinReadFile(path: []const u8) Value {
     const bytes = std.fs.cwd().readFileAlloc(allocator, path, 16 * 1024 * 1024) catch @panic("read_file failed");
     return .{ .str = bytes };
@@ -188,6 +204,54 @@ fn builtinPathJoin(a: []const u8, b: []const u8) Value {
     }
     std.mem.copyForwards(u8, buf[i .. i + b.len], b);
     return .{ .str = buf };
+}
+
+fn clampIndex(start: i64, limit: usize) usize {
+    if (start <= 0) return 0;
+    const ustart: u64 = @intCast(start);
+    const max_usize: u64 = @intCast(std.math.maxInt(usize));
+    if (ustart > max_usize) return limit;
+    const idx: usize = @intCast(ustart);
+    if (idx > limit) return limit;
+    return idx;
+}
+
+fn clampLimit(len: usize, limit_value: i64) usize {
+    if (limit_value <= 0) return 0;
+    const ulimit: u64 = @intCast(limit_value);
+    const max_usize: u64 = @intCast(std.math.maxInt(usize));
+    if (ulimit > max_usize) return len;
+    const limit: usize = @intCast(ulimit);
+    if (limit > len) return len;
+    return limit;
+}
+
+fn builtinConsumeDigits(src: []const u8, start: i64, limit_value: ?i64) i64 {
+    const limit = if (limit_value) |v| clampLimit(src.len, v) else src.len;
+    var i: usize = clampIndex(start, limit);
+    while (i < limit) : (i += 1) {
+        if (!isDigit(src[i])) break;
+    }
+    return @intCast(i);
+}
+
+fn builtinConsumeIdent(src: []const u8, start: i64, limit_value: ?i64) i64 {
+    const limit = if (limit_value) |v| clampLimit(src.len, v) else src.len;
+    var i: usize = clampIndex(start, limit);
+    while (i < limit) : (i += 1) {
+        const c = src[i];
+        if (!(isAlpha(c) or isDigit(c))) break;
+    }
+    return @intCast(i);
+}
+
+fn builtinSkipLineComment(src: []const u8, start: i64, limit_value: ?i64) i64 {
+    const limit = if (limit_value) |v| clampLimit(src.len, v) else src.len;
+    var i: usize = clampIndex(start, limit);
+    while (i < limit) : (i += 1) {
+        if (src[i] == '\n') return @intCast(i + 1);
+    }
+    return @intCast(i);
 }
 
 // --- Bytecode VM (Zig runtime) ---
@@ -350,6 +414,8 @@ fn bcRunProgram(bc_funcs: Value, prog_args: Value) Value {
     if (builtinEnvFind(bc_funcs, "main")) |main_rec| {
         const root_vals = builtinEnvCreate(null);
         const root_defs = builtinEnvCreate(null);
+        defer builtinEnvDestroy(root_vals);
+        defer builtinEnvDestroy(root_defs);
         const tmp_args = [_]Value{};
         return bcExecFunc(main_rec, tmp_args[0..], root_vals, root_defs, bc_funcs, prog_args);
     }
@@ -693,8 +759,8 @@ fn compilerCoreSourceMaxMtime() !i128 {
     return max_mtime;
 }
 
-fn updateMaxMtimeForUseDeps(arena_alloc: std.mem.Allocator, current_path: []const u8, imported: *std.StringHashMap(void), max_mtime: *i128) !void {
-    const real_path = try std.fs.cwd().realpathAlloc(arena_alloc, current_path);
+fn updateMaxMtimeForUseDeps(arena_alloc: std.mem.Allocator, path: []const u8, imported: *std.StringHashMap(void), max_mtime: *i128) !void {
+    const real_path = try std.fs.cwd().realpathAlloc(arena_alloc, path);
     if (imported.contains(real_path)) return;
     try imported.put(real_path, {});
 
@@ -702,7 +768,7 @@ fn updateMaxMtimeForUseDeps(arena_alloc: std.mem.Allocator, current_path: []cons
     if (stat.mtime > max_mtime.*) max_mtime.* = stat.mtime;
 
     const source = try std.fs.cwd().readFileAlloc(arena_alloc, real_path, 16 * 1024 * 1024);
-    var list = try tokenizeSource(source);
+    var list = try tokenizeSource(source, real_path);
     defer list.deinit();
 
     var brace_depth: usize = 0;
@@ -766,6 +832,10 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
         const key = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
         if (builtinEnvFind(env_handle, key)) |v| return v;
         return makeInt(0);
+    } else if (std.mem.eql(u8, name, "env_destroy")) {
+        const env_handle = if (args.len > 0) args[0] else makeInt(0);
+        builtinEnvDestroy(env_handle);
+        return makeInt(0);
     } else if (std.mem.eql(u8, name, "str_len")) {
         const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
         return makeInt(@as(i64, @intCast(s.len)));
@@ -786,6 +856,41 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
         const ustart: usize = @intCast(start);
         const uend: usize = @intCast(end);
         return .{ .str = s[ustart..uend] };
+    } else if (std.mem.eql(u8, name, "str_eq")) {
+        const a = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const b = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+        return makeInt(if (std.mem.eql(u8, a, b)) 1 else 0);
+    } else if (std.mem.eql(u8, name, "consume_digits")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        return makeInt(builtinConsumeDigits(s, start, null));
+    } else if (std.mem.eql(u8, name, "consume_ident")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        return makeInt(builtinConsumeIdent(s, start, null));
+    } else if (std.mem.eql(u8, name, "skip_line_comment")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        return makeInt(builtinSkipLineComment(s, start, null));
+    } else if (std.mem.eql(u8, name, "vexc_consume_digits")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        const limit = expectInt(if (args.len > 2) args[2] else makeInt(0));
+        return makeInt(builtinConsumeDigits(s, start, @as(?i64, limit)));
+    } else if (std.mem.eql(u8, name, "vexc_consume_ident")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+        const limit = expectInt(if (args.len > 2) args[2] else makeInt(0));
+        return makeInt(builtinConsumeIdent(s, start, @as(?i64, limit)));
+    } else if (std.mem.eql(u8, name, "vexc_tokenize_native")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        return builtinVexcTokenizeNative(s);
+    } else if (std.mem.eql(u8, name, "lex_tokenize_native")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        return builtinLexTokenizeNative(s);
+    } else if (std.mem.eql(u8, name, "lex_tokenize_native_pos")) {
+        const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+        return builtinLexTokenizeNativePos(s);
     } else if (std.mem.eql(u8, name, "print_bytes")) {
         builtinPrintBytes(expectStr(if (args.len > 0) args[0] else Value{ .str = "" }));
         return makeInt(0);
@@ -812,6 +917,10 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
         const idx_val = if (args.len > 1) args[1] else makeInt(0);
         const v = if (args.len > 2) args[2] else makeInt(0);
         builtinListSet(list_handle, idx_val, v);
+        return makeInt(0);
+    } else if (std.mem.eql(u8, name, "list_destroy")) {
+        const list_handle = if (args.len > 0) args[0] else makeInt(0);
+        builtinListDestroy(list_handle);
         return makeInt(0);
     } else if (std.mem.eql(u8, name, "read_file")) {
         const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
@@ -858,6 +967,8 @@ fn bcCallValue(name: []const u8, args: []const Value, caller_vals: Value, caller
 fn bcExecFunc(func_rec: Value, args: []const Value, caller_vals: Value, caller_defs: Value, bc_funcs: Value, prog_args: Value) Value {
     const vals = builtinEnvCreate(caller_vals);
     const defs = builtinEnvCreate(caller_defs);
+    defer builtinEnvDestroy(vals);
+    defer builtinEnvDestroy(defs);
 
     const params = bcListGet(func_rec, 1);
     const nparams = bcListLen(params);
@@ -1076,6 +1187,7 @@ const Token = struct {
     kind: Kind,
     text: []const u8,
     line: usize,
+    col: usize,
 
     const Kind = enum {
         identifier,
@@ -1128,26 +1240,149 @@ const Func = struct {
     param_names: []const []const u8,
     body: []Token,
     is_accel: bool,
+    path: []const u8,
+    source: []const u8,
 };
 
 var tokens: []Token = &[_]Token{};
 var pos: usize = 0;
 var functions: std.StringHashMap(Func) = undefined;
+var current_path: []const u8 = "";
+var current_source: []const u8 = "";
 
 fn tokenKindLabel(k: Token.Kind) []const u8 {
     return switch (k) {
-        .keyword_let => "Let",
-        .keyword_print => "Print",
-        .keyword_use => "Use",
-        .identifier => "Ident",
-        .integer => "Int",
-        .plus => "Plus",
-        .l_paren => "LParen",
-        .r_paren => "RParen",
-        .dot => "Dot",
-        .eof => "Eof",
-        else => "Other",
+        .identifier => "identifier",
+        .string => "string",
+        .integer => "integer",
+        .keyword_let => "'let'",
+        .keyword_print => "'print'",
+        .keyword_fn => "'fn'",
+        .keyword_return => "'return'",
+        .keyword_if => "'if'",
+        .keyword_else => "'else'",
+        .keyword_while => "'while'",
+        .keyword_and => "'and'",
+        .keyword_or => "'or'",
+        .keyword_accel => "'accel'",
+        .keyword_true => "'true'",
+        .keyword_false => "'false'",
+        .keyword_null => "'null'",
+        .keyword_for => "'for'",
+        .keyword_in => "'in'",
+        .keyword_break => "'break'",
+        .keyword_continue => "'continue'",
+        .keyword_use => "'use'",
+        .l_paren => "'('",
+        .r_paren => "')'",
+        .l_brace => "'{'",
+        .r_brace => "'}'",
+        .l_bracket => "'['",
+        .r_bracket => "']'",
+        .dot => "'.'",
+        .dot_dot => "'..'",
+        .equal => "'='",
+        .equal_equal => "'=='",
+        .bang_equal => "'!='",
+        .plus => "'+'",
+        .plus_equal => "'+='",
+        .minus => "'-'",
+        .star => "'*'",
+        .slash => "'/'",
+        .less => "'<'",
+        .less_equal => "'<='",
+        .greater => "'>'",
+        .greater_equal => "'>='",
+        .eof => "end of file",
     };
+}
+
+fn lineSlice(source: []const u8, target_line: usize) []const u8 {
+    var line: usize = 1;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < source.len) : (i += 1) {
+        if (source[i] == '\n') {
+            if (line == target_line) return source[start..i];
+            line += 1;
+            start = i + 1;
+        }
+    }
+    if (line == target_line) return source[start..source.len];
+    return "";
+}
+
+fn printCaret(col: usize) void {
+    var i: usize = 1;
+    while (i < col) : (i += 1) {
+        print(" ", .{});
+    }
+    print("^\n", .{});
+}
+
+fn reportErrorAt(path: []const u8, source: []const u8, line: usize, col: usize, msg: []const u8) noreturn {
+    if (path.len != 0) {
+        print("[vex] error: {s}:{d}:{d}: {s}\n", .{ path, line, col, msg });
+    } else {
+        print("[vex] error: {d}:{d}: {s}\n", .{ line, col, msg });
+    }
+    if (source.len != 0) {
+        const text = lineSlice(source, line);
+        if (text.len != 0) {
+            print("{s}\n", .{text});
+            printCaret(col);
+        }
+    }
+    std.process.exit(1);
+}
+
+fn reportErrorExpected(path: []const u8, source: []const u8, line: usize, col: usize, expected: Token.Kind, got: Token.Kind) noreturn {
+    if (path.len != 0) {
+        print("[vex] error: {s}:{d}:{d}: expected {s}, got {s}\n", .{ path, line, col, tokenKindLabel(expected), tokenKindLabel(got) });
+    } else {
+        print("[vex] error: {d}:{d}: expected {s}, got {s}\n", .{ line, col, tokenKindLabel(expected), tokenKindLabel(got) });
+    }
+    if (source.len != 0) {
+        const text = lineSlice(source, line);
+        if (text.len != 0) {
+            print("{s}\n", .{text});
+            printCaret(col);
+        }
+    }
+    std.process.exit(1);
+}
+
+fn reportErrorAtToken(tok: Token, msg: []const u8) noreturn {
+    reportErrorAt(current_path, current_source, tok.line, tok.col, msg);
+}
+
+fn reportErrorAtName(tok: Token, label: []const u8, name: []const u8) noreturn {
+    if (current_path.len != 0) {
+        print("[vex] error: {s}:{d}:{d}: {s} {s}\n", .{ current_path, tok.line, tok.col, label, name });
+    } else {
+        print("[vex] error: {d}:{d}: {s} {s}\n", .{ tok.line, tok.col, label, name });
+    }
+    if (current_source.len != 0) {
+        const text = lineSlice(current_source, tok.line);
+        if (text.len != 0) {
+            print("{s}\n", .{text});
+            printCaret(tok.col);
+        }
+    }
+    std.process.exit(1);
+}
+
+fn parseErrorAt(tok: Token, msg: []const u8) noreturn {
+    reportErrorAtToken(tok, msg);
+}
+
+fn parseError(msg: []const u8) noreturn {
+    parseErrorAt(peek(), msg);
+}
+
+fn lastTokenOrPeek() Token {
+    if (pos == 0) return peek();
+    return tokens[pos - 1];
 }
 
 fn debugTokenizeZig() void {
@@ -1158,12 +1393,18 @@ fn debugTokenizeZig() void {
 
     var i: usize = 0;
     var line: usize = 1;
+    var col: usize = 1;
     while (i < source.len) {
         const c = source[i];
 
         // whitespace/newline/semicolon
         if (c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == ';') {
-            if (c == '\n') line += 1;
+            if (c == '\n') {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
             i += 1;
             continue;
         }
@@ -1171,6 +1412,7 @@ fn debugTokenizeZig() void {
         // identifiers / keywords
         if (isAlpha(c)) {
             const start = i;
+            const start_col = col;
             i += 1;
             while (i < source.len and (isAlpha(source[i]) or isDigit(source[i]) or source[i] == '_')) : (i += 1) {}
             const word = source[start..i];
@@ -1178,41 +1420,48 @@ fn debugTokenizeZig() void {
                 if (std.mem.eql(u8, word, "let")) .keyword_let
                 else if (std.mem.eql(u8, word, "print")) .keyword_print
                 else .identifier;
-            list.append(.{ .kind = kind, .text = word, .line = line }) catch @panic("oom");
+            list.append(.{ .kind = kind, .text = word, .line = line, .col = start_col }) catch @panic("oom");
+            col += i - start;
             continue;
         }
 
         // numbers
         if (isDigit(c)) {
             const start = i;
+            const start_col = col;
             i += 1;
             while (i < source.len and isDigit(source[i])) : (i += 1) {}
-            list.append(.{ .kind = .integer, .text = source[start..i], .line = line }) catch @panic("oom");
+            list.append(.{ .kind = .integer, .text = source[start..i], .line = line, .col = start_col }) catch @panic("oom");
+            col += i - start;
             continue;
         }
 
         // symbols we care about
         if (c == '+') {
-            list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            list.append(.{ .kind = .plus, .text = source[i..i+1], .line = line, .col = col }) catch @panic("oom");
             i += 1;
+            col += 1;
             continue;
         }
         if (c == '(') {
-            list.append(.{ .kind = .l_paren, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            list.append(.{ .kind = .l_paren, .text = source[i..i+1], .line = line, .col = col }) catch @panic("oom");
             i += 1;
+            col += 1;
             continue;
         }
         if (c == ')') {
-            list.append(.{ .kind = .r_paren, .text = source[i..i+1], .line = line }) catch @panic("oom");
+            list.append(.{ .kind = .r_paren, .text = source[i..i+1], .line = line, .col = col }) catch @panic("oom");
             i += 1;
+            col += 1;
             continue;
         }
 
         // ignore anything else (like '=')
         i += 1;
+        col += 1;
     }
 
-    list.append(.{ .kind = .eof, .text = "", .line = line }) catch @panic("oom");
+    list.append(.{ .kind = .eof, .text = "", .line = line, .col = col }) catch @panic("oom");
 
     print("demo_tokenize (zig):\n", .{});
     for (list.items) |t| {
@@ -1231,8 +1480,9 @@ fn advance() Token {
 }
 
 fn consume(kind: Token.Kind) void {
-    if (peek().kind != kind) {
-        @panic("parse error");
+    const t = peek();
+    if (t.kind != kind) {
+        reportErrorExpected(current_path, current_source, t.line, t.col, kind, t.kind);
     }
     _ = advance();
 }
@@ -1245,147 +1495,197 @@ fn isAlpha(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_';
 }
 
-fn tokenizeSource(source: []const u8) !std.ArrayList(Token) {
+fn tokenizeSource(source: []const u8, path: []const u8) !std.ArrayList(Token) {
     var list = std.ArrayList(Token).init(allocator);
 
     var i: usize = 0;
     var line: usize = 1;
+    var col: usize = 1;
     while (i < source.len) {
         const c = source[i];
 
         if (c == ' ' or c == '\t' or c == '\r') {
             i += 1;
+            col += 1;
+            continue;
+        }
+        if (c == ',' or c == ';' or c == '@') {
+            i += 1;
+            col += 1;
             continue;
         }
         if (c == '\n') {
             line += 1;
             i += 1;
+            col = 1;
             continue;
         }
 
         // Line comments: // ...
         if (c == '/' and i + 1 < source.len and source[i + 1] == '/') {
             i += 2;
-            while (i < source.len and source[i] != '\n') : (i += 1) {}
+            col += 2;
+            while (i < source.len and source[i] != '\n') : (i += 1) {
+                col += 1;
+            }
             continue;
         }
 
         if (c == '"') {
             const start = i;
+            const start_line = line;
+            const start_col = col;
             i += 1;
-            while (i < source.len and source[i] != '"') : (i += 1) {}
-            if (i >= source.len) @panic("unterminated string");
+            col += 1;
+            while (i < source.len and source[i] != '"') {
+                if (source[i] == '\\' and i + 1 < source.len) {
+                    i += 2;
+                    col += 2;
+                    continue;
+                }
+                if (source[i] == '\n') {
+                    i += 1;
+                    line += 1;
+                    col = 1;
+                    continue;
+                }
+                i += 1;
+                col += 1;
+            }
+            if (i >= source.len) reportErrorAt(path, source, start_line, start_col, "unterminated string");
             i += 1;
+            col += 1;
             try list.append(.{
                 .kind = .string,
                 .text = source[start..i],
-                .line = line,
+                .line = start_line,
+                .col = start_col,
             });
             continue;
         }
 
         switch (c) {
             '(' => {
-                try list.append(.{ .kind = .l_paren, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .l_paren, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             ')' => {
-                try list.append(.{ .kind = .r_paren, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .r_paren, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '.' => {
                 if (i + 1 < source.len and source[i + 1] == '.') {
-                    try list.append(.{ .kind = .dot_dot, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .dot_dot, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    try list.append(.{ .kind = .dot, .text = source[i..i + 1], .line = line });
+                    try list.append(.{ .kind = .dot, .text = source[i..i + 1], .line = line, .col = col });
                     i += 1;
+                    col += 1;
                 }
                 continue;
             },
             '{' => {
-                try list.append(.{ .kind = .l_brace, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .l_brace, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '}' => {
-                try list.append(.{ .kind = .r_brace, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .r_brace, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '[' => {
-                try list.append(.{ .kind = .l_bracket, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .l_bracket, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             ']' => {
-                try list.append(.{ .kind = .r_bracket, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .r_bracket, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '+' => {
                 if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .plus_equal, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .plus_equal, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    try list.append(.{ .kind = .plus, .text = source[i..i + 1], .line = line });
+                    try list.append(.{ .kind = .plus, .text = source[i..i + 1], .line = line, .col = col });
                     i += 1;
+                    col += 1;
                 }
                 continue;
             },
             '-' => {
-                try list.append(.{ .kind = .minus, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .minus, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '*' => {
-                try list.append(.{ .kind = .star, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .star, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '/' => {
-                try list.append(.{ .kind = .slash, .text = source[i..i + 1], .line = line });
+                try list.append(.{ .kind = .slash, .text = source[i..i + 1], .line = line, .col = col });
                 i += 1;
+                col += 1;
                 continue;
             },
             '<' => {
                 if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .less_equal, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .less_equal, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    try list.append(.{ .kind = .less, .text = source[i..i + 1], .line = line });
+                    try list.append(.{ .kind = .less, .text = source[i..i + 1], .line = line, .col = col });
                     i += 1;
+                    col += 1;
                 }
                 continue;
             },
             '>' => {
                 if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .greater_equal, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .greater_equal, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    try list.append(.{ .kind = .greater, .text = source[i..i + 1], .line = line });
+                    try list.append(.{ .kind = .greater, .text = source[i..i + 1], .line = line, .col = col });
                     i += 1;
+                    col += 1;
                 }
                 continue;
             },
             '=' => {
                 if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .equal_equal, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .equal_equal, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    try list.append(.{ .kind = .equal, .text = source[i..i + 1], .line = line });
+                    try list.append(.{ .kind = .equal, .text = source[i..i + 1], .line = line, .col = col });
                     i += 1;
+                    col += 1;
                 }
                 continue;
             },
             '!' => {
                 if (i + 1 < source.len and source[i + 1] == '=') {
-                    try list.append(.{ .kind = .bang_equal, .text = source[i..i + 2], .line = line });
+                    try list.append(.{ .kind = .bang_equal, .text = source[i..i + 2], .line = line, .col = col });
                     i += 2;
+                    col += 2;
                 } else {
-                    i += 1;
+                    reportErrorAt(path, source, line, col, "unexpected '!'");
                 }
                 continue;
             },
@@ -1394,18 +1694,22 @@ fn tokenizeSource(source: []const u8) !std.ArrayList(Token) {
 
         if (isDigit(c)) {
             const start = i;
+            const start_col = col;
             i += 1;
             while (i < source.len and isDigit(source[i])) : (i += 1) {}
             try list.append(.{
                 .kind = .integer,
                 .text = source[start..i],
                 .line = line,
+                .col = start_col,
             });
+            col += i - start;
             continue;
         }
 
         if (isAlpha(c)) {
             const start = i;
+            const start_col = col;
             i += 1;
             while (i < source.len and (isAlpha(source[i]) or isDigit(source[i]))) : (i += 1) {}
             const word = source[start..i];
@@ -1433,20 +1737,110 @@ fn tokenizeSource(source: []const u8) !std.ArrayList(Token) {
                 .kind = kind,
                 .text = word,
                 .line = line,
+                .col = start_col,
             });
+            col += i - start;
             continue;
         }
 
-        i += 1;
+        reportErrorAt(path, source, line, col, "unexpected character");
     }
 
     try list.append(.{
         .kind = .eof,
         .text = "",
         .line = line,
+        .col = col,
     });
 
     return list;
+}
+
+fn vexcKindFromToken(kind: Token.Kind) i64 {
+    return switch (kind) {
+        .identifier => 1,
+        .string => 3,
+        .integer => 2,
+        .keyword_let => 4,
+        .keyword_print => 5,
+        .keyword_fn => 6,
+        .keyword_return => 7,
+        .keyword_if => 8,
+        .keyword_else => 28,
+        .keyword_while => 9,
+        .keyword_and => 24,
+        .keyword_or => 25,
+        .keyword_accel => 10,
+        .keyword_true => 31,
+        .keyword_false => 32,
+        .keyword_null => 33,
+        .keyword_for => 34,
+        .keyword_in => 35,
+        .keyword_break => 39,
+        .keyword_continue => 40,
+        .keyword_use => 41,
+        .l_paren => 11,
+        .r_paren => 12,
+        .l_brace => 13,
+        .r_brace => 14,
+        .l_bracket => 37,
+        .r_bracket => 38,
+        .dot => 29,
+        .dot_dot => 36,
+        .equal => 15,
+        .equal_equal => 16,
+        .bang_equal => 17,
+        .plus => 18,
+        .plus_equal => 30,
+        .minus => 19,
+        .star => 20,
+        .slash => 21,
+        .less => 22,
+        .less_equal => 23,
+        .greater => 26,
+        .greater_equal => 27,
+        .eof => 0,
+    };
+}
+
+fn builtinVexcTokenizeNative(src: []const u8) Value {
+    var list = tokenizeSource(src, "") catch @panic("tokenize failed");
+    defer list.deinit();
+
+    const out = builtinListCreate();
+    for (list.items) |tok| {
+        builtinListPush(out, makeInt(vexcKindFromToken(tok.kind)));
+        builtinListPush(out, .{ .str = tok.text });
+        builtinListPush(out, makeInt(@intCast(tok.line)));
+        builtinListPush(out, makeInt(@intCast(tok.col)));
+    }
+    return out;
+}
+
+fn builtinLexTokenizeNative(src: []const u8) Value {
+    var list = tokenizeSource(src, "") catch @panic("tokenize failed");
+    defer list.deinit();
+
+    const out = builtinListCreate();
+    for (list.items) |tok| {
+        builtinListPush(out, makeInt(vexcKindFromToken(tok.kind)));
+        builtinListPush(out, .{ .str = tok.text });
+    }
+    return out;
+}
+
+fn builtinLexTokenizeNativePos(src: []const u8) Value {
+    var list = tokenizeSource(src, "") catch @panic("tokenize failed");
+    defer list.deinit();
+
+    const out = builtinListCreate();
+    for (list.items) |tok| {
+        builtinListPush(out, makeInt(vexcKindFromToken(tok.kind)));
+        builtinListPush(out, .{ .str = tok.text });
+        builtinListPush(out, makeInt(@intCast(tok.line)));
+        builtinListPush(out, makeInt(@intCast(tok.col)));
+    }
+    return out;
 }
 
 fn stringLiteralValue(tok: Token) []const u8 {
@@ -1462,16 +1856,16 @@ fn resolveUsePath(alloc: std.mem.Allocator, importer_path: []const u8, spec: []c
     return std.fs.path.join(alloc, &.{ dir, spec }) catch @panic("oom");
 }
 
-fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.StringHashMap(void), allow_exec: bool) void {
+fn scanTopLevel(file_path: []const u8, global_env: *Env, imported: *std.StringHashMap(void), allow_exec: bool) void {
     while (peek().kind != .eof) {
         const t = peek();
         switch (t.kind) {
             .keyword_use => {
                 _ = advance(); // 'use'
                 const path_tok = advance();
-                if (path_tok.kind != .string) @panic("use: expected string");
+                if (path_tok.kind != .string) parseErrorAt(path_tok, "use expects a string");
                 const spec = stringLiteralValue(path_tok);
-                const full_path = resolveUsePath(allocator, current_path, spec);
+                const full_path = resolveUsePath(allocator, file_path, spec);
                 if (imported.contains(full_path)) {
                     allocator.free(full_path);
                     continue;
@@ -1484,18 +1878,24 @@ fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.Strin
                 };
                 // Don't free `source`: function bodies keep slices into it.
 
-                var list = tokenizeSource(source) catch @panic("tokenize failed");
+                var list = tokenizeSource(source, full_path) catch @panic("tokenize failed");
                 defer list.deinit();
 
                 const saved_tokens = tokens;
                 const saved_pos = pos;
+                const saved_path = current_path;
+                const saved_source = current_source;
 
                 tokens = list.items;
                 pos = 0;
+                current_path = full_path;
+                current_source = source;
                 scanTopLevel(full_path, global_env, imported, false);
 
                 tokens = saved_tokens;
                 pos = saved_pos;
+                current_path = saved_path;
+                current_source = saved_source;
             },
             .keyword_accel => parseFunction(true),
             .keyword_fn => parseFunction(false),
@@ -1505,9 +1905,9 @@ fn scanTopLevel(current_path: []const u8, global_env: *Env, imported: *std.Strin
                     const ctrl = evalStmt(global_env);
                     switch (ctrl) {
                         .none => {},
-                        .ret => @panic("return outside function"),
-                        .brk => @panic("break outside loop"),
-                        .cont => @panic("continue outside loop"),
+                        .ret => parseErrorAt(lastTokenOrPeek(), "return outside function"),
+                        .brk => parseErrorAt(lastTokenOrPeek(), "break outside loop"),
+                        .cont => parseErrorAt(lastTokenOrPeek(), "continue outside loop"),
                     }
                     if (verbose and peek().kind != .eof) {
                         print("\n", .{});
@@ -1526,11 +1926,11 @@ fn parseFunction(is_accel: bool) void {
     }
 
     // expect 'fn'
-    if (peek().kind != .keyword_fn) @panic("expected fn after accel");
+    if (peek().kind != .keyword_fn) parseError("expected fn after accel");
     _ = advance();
 
     const name_tok = advance();
-    if (name_tok.kind != .identifier) @panic("expected function name");
+    if (name_tok.kind != .identifier) parseErrorAt(name_tok, "expected function name");
 
     var params = std.ArrayList([]const u8).init(allocator);
     defer params.deinit();
@@ -1552,7 +1952,7 @@ fn parseFunction(is_accel: bool) void {
     while (peek().kind != .l_brace and peek().kind != .eof) {
         _ = advance();
     }
-    if (peek().kind != .l_brace) @panic("expected { for function body");
+    if (peek().kind != .l_brace) parseError("expected '{' for function body");
 
     // Enter body
     consume(.l_brace);
@@ -1579,6 +1979,7 @@ fn parseFunction(is_accel: bool) void {
         .kind = .eof,
         .text = "",
         .line = if (body_len > 0) body_slice[body_len - 1].line else 0,
+        .col = if (body_len > 0) body_slice[body_len - 1].col else 0,
     };
 
     const func = Func{
@@ -1586,6 +1987,8 @@ fn parseFunction(is_accel: bool) void {
         .param_names = param_names,
         .body = body_slice,
         .is_accel = is_accel,
+        .path = current_path,
+        .source = current_source,
     };
 
     functions.put(func.name, func) catch @panic("oom");
@@ -1599,15 +2002,22 @@ fn parseFunction(is_accel: bool) void {
 
 fn runFunction(name: []const u8, args: []const Value, caller_env: *Env) Value {
     const func = functions.get(name) orelse {
-        print("[undefined function] {s}\n", .{name});
-        @panic("undefined function");
+        reportErrorAtName(lastTokenOrPeek(), "undefined function", name);
     };
 
     const saved_tokens = tokens;
     const saved_pos = pos;
+    const saved_path = current_path;
+    const saved_source = current_source;
 
     tokens = func.body;
     pos = 0;
+    current_path = func.path;
+    current_source = func.source;
+    defer {
+        current_path = saved_path;
+        current_source = saved_source;
+    }
 
     const local_env = Env.create(caller_env) catch @panic("oom");
     defer {
@@ -1632,8 +2042,8 @@ fn runFunction(name: []const u8, args: []const Value, caller_env: *Env) Value {
                 has_result = true;
                 break;
             },
-            .brk => @panic("break outside loop"),
-            .cont => @panic("continue outside loop"),
+            .brk => parseErrorAt(lastTokenOrPeek(), "break outside loop"),
+            .cont => parseErrorAt(lastTokenOrPeek(), "continue outside loop"),
         }
     }
 
@@ -1650,7 +2060,7 @@ fn evalPrimary(env: *Env) Value {
     if (t.kind == .dot) {
         _ = advance(); // '.'
         const name_tok = advance();
-        if (name_tok.kind != .identifier) @panic("dot literal: expected identifier");
+        if (name_tok.kind != .identifier) parseErrorAt(name_tok, "dot literal expects identifier");
         return .{ .str = name_tok.text };
     }
 
@@ -1692,6 +2102,10 @@ fn evalPrimary(env: *Env) Value {
             } else {
                 result = makeInt(0);
             }
+        } else if (std.mem.eql(u8, name, "env_destroy")) {
+            const env_handle = if (args.len > 0) args[0] else makeInt(0);
+            builtinEnvDestroy(env_handle);
+            result = makeInt(0);
         } else if (std.mem.eql(u8, name, "str_len")) {
             const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
             result = makeInt(@as(i64, @intCast(s.len)));
@@ -1715,6 +2129,41 @@ fn evalPrimary(env: *Env) Value {
             const ustart: usize = @intCast(start);
             const uend: usize = @intCast(end);
             result = .{ .str = s[ustart..uend] };
+        } else if (std.mem.eql(u8, name, "str_eq")) {
+            const a = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const b = expectStr(if (args.len > 1) args[1] else Value{ .str = "" });
+            result = makeInt(if (std.mem.eql(u8, a, b)) 1 else 0);
+        } else if (std.mem.eql(u8, name, "consume_digits")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            result = makeInt(builtinConsumeDigits(s, start, null));
+        } else if (std.mem.eql(u8, name, "consume_ident")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            result = makeInt(builtinConsumeIdent(s, start, null));
+        } else if (std.mem.eql(u8, name, "skip_line_comment")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            result = makeInt(builtinSkipLineComment(s, start, null));
+        } else if (std.mem.eql(u8, name, "vexc_consume_digits")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            const limit = expectInt(if (args.len > 2) args[2] else makeInt(0));
+            result = makeInt(builtinConsumeDigits(s, start, @as(?i64, limit)));
+        } else if (std.mem.eql(u8, name, "vexc_consume_ident")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            const start = expectInt(if (args.len > 1) args[1] else makeInt(0));
+            const limit = expectInt(if (args.len > 2) args[2] else makeInt(0));
+            result = makeInt(builtinConsumeIdent(s, start, @as(?i64, limit)));
+        } else if (std.mem.eql(u8, name, "vexc_tokenize_native")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            result = builtinVexcTokenizeNative(s);
+        } else if (std.mem.eql(u8, name, "lex_tokenize_native")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            result = builtinLexTokenizeNative(s);
+        } else if (std.mem.eql(u8, name, "lex_tokenize_native_pos")) {
+            const s = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
+            result = builtinLexTokenizeNativePos(s);
         } else if (std.mem.eql(u8, name, "print_bytes")) {
             builtinPrintBytes(expectStr(if (args.len > 0) args[0] else Value{ .str = "" }));
             result = makeInt(0);
@@ -1741,6 +2190,10 @@ fn evalPrimary(env: *Env) Value {
             const idx_val = if (args.len > 1) args[1] else makeInt(0);
             const v = if (args.len > 2) args[2] else makeInt(0);
             builtinListSet(list_handle, idx_val, v);
+            result = makeInt(0);
+        } else if (std.mem.eql(u8, name, "list_destroy")) {
+            const list_handle = if (args.len > 0) args[0] else makeInt(0);
+            builtinListDestroy(list_handle);
             result = makeInt(0);
         } else if (std.mem.eql(u8, name, "read_file")) {
             const path = expectStr(if (args.len > 0) args[0] else Value{ .str = "" });
@@ -1796,7 +2249,7 @@ fn evalPrimary(env: *Env) Value {
         if (peek().kind == .dot) {
             _ = advance(); // '.'
             const field_tok = advance();
-            if (field_tok.kind != .identifier) @panic("member access: expected identifier");
+            if (field_tok.kind != .identifier) parseErrorAt(field_tok, "member access expects identifier");
             if (builtinEnvFind(result, field_tok.text)) |v| {
                 result = v;
             } else {
@@ -2087,7 +2540,7 @@ fn evalStmt(env: *Env) Control {
             _ = advance(); // 'if'
             const cond = expectInt(evalExpr(env));
 
-            if (peek().kind != .l_brace) @panic("if: expected {");
+            if (peek().kind != .l_brace) parseError("if expects '{'");
 
             if (cond != 0) {
                 const ctrl = execBlock(env);
@@ -2098,7 +2551,7 @@ fn evalStmt(env: *Env) Control {
 
                 if (peek().kind == .keyword_else) {
                     _ = advance(); // 'else'
-                    if (peek().kind != .l_brace) @panic("else: expected {");
+                    if (peek().kind != .l_brace) parseError("else expects '{'");
                     skipBlock();
                 }
             } else {
@@ -2106,7 +2559,7 @@ fn evalStmt(env: *Env) Control {
 
                 if (peek().kind == .keyword_else) {
                     _ = advance(); // 'else'
-                    if (peek().kind != .l_brace) @panic("else: expected {");
+                    if (peek().kind != .l_brace) parseError("else expects '{'");
                     const ctrl = execBlock(env);
                     switch (ctrl) {
                         .none => {},
@@ -2116,7 +2569,7 @@ fn evalStmt(env: *Env) Control {
             }
         },
         .keyword_else => {
-            @panic("else without if");
+            parseErrorAt(t, "else without if");
         },
         .keyword_break => {
             _ = advance(); // 'break'
@@ -2129,17 +2582,17 @@ fn evalStmt(env: *Env) Control {
         .keyword_for => {
             _ = advance(); // 'for'
             const name_tok = advance();
-            if (name_tok.kind != .identifier) @panic("for: expected identifier");
-            if (peek().kind != .keyword_in) @panic("for: expected in");
+            if (name_tok.kind != .identifier) parseErrorAt(name_tok, "for expects identifier");
+            if (peek().kind != .keyword_in) parseError("for expects 'in'");
             _ = advance(); // 'in'
 
             var idx = expectInt(evalExpr(env));
-            if (peek().kind != .dot_dot) @panic("for: expected ..");
+            if (peek().kind != .dot_dot) parseError("for expects '..'");
             _ = advance(); // '..'
             const end = expectInt(evalExpr(env));
 
             const body_start = pos;
-            if (peek().kind != .l_brace) @panic("for: expected {");
+            if (peek().kind != .l_brace) parseError("for expects '{'");
 
             var scan_pos: usize = body_start;
             var depth: usize = 0;
@@ -2159,7 +2612,7 @@ fn evalStmt(env: *Env) Control {
 
             const body_end = scan_pos;
             if (body_end <= body_start or tokens[body_end - 1].kind != .r_brace) {
-                @panic("for: unterminated block");
+                parseErrorAt(lastTokenOrPeek(), "for unterminated block");
             }
 
             while (idx < end) : (idx += 1) {
@@ -2189,7 +2642,7 @@ fn evalStmt(env: *Env) Control {
             var cond = expectInt(evalExpr(env));
 
             const body_start = pos;
-            if (peek().kind != .l_brace) @panic("while: expected {");
+            if (peek().kind != .l_brace) parseError("while expects '{'");
 
             var scan_pos: usize = body_start;
             var depth: usize = 0;
@@ -2209,7 +2662,7 @@ fn evalStmt(env: *Env) Control {
 
             const body_end = scan_pos;
             if (body_end <= body_start or tokens[body_end - 1].kind != .r_brace) {
-                @panic("while: unterminated block");
+                parseErrorAt(lastTokenOrPeek(), "while unterminated block");
             }
 
             while (cond != 0) {
@@ -2262,7 +2715,7 @@ fn evalStmt(env: *Env) Control {
         .keyword_let => {
             _ = advance(); // 'let'
             const name_tok = advance();
-            if (name_tok.kind != .identifier) @panic("expected identifier after let");
+            if (name_tok.kind != .identifier) parseErrorAt(name_tok, "expected identifier after 'let'");
             consume(.equal);
             const val = evalExpr(env);
             env.set(name_tok.text, val);
@@ -2537,7 +2990,10 @@ pub fn main() !void {
     const source = try std.fs.cwd().readFileAlloc(allocator, file_path, 1024 * 1024);
     defer allocator.free(source);
 
-    var list = try tokenizeSource(source);
+    current_path = file_path;
+    current_source = source;
+
+    var list = try tokenizeSource(source, file_path);
     defer list.deinit();
 
     tokens = list.items;

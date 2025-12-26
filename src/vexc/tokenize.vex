@@ -5,6 +5,8 @@
 // Line/col are 1-based.
 // Kind values match `src/core/lex.vex` / `src/compiler_core.vex`.
 
+use "../core/lex.vex"
+
 fn vexc_consume_digits(src, i, n) {
     while i < n {
         let c = str_char(src, i)
@@ -153,8 +155,23 @@ fn vexc_tokenize(src) {
             let start_col = col
             let i = i + 1
             let col = col + 1
-            while i < n and str_char(src, i) != 34 {
+            while i < n {
                 let c2 = str_char(src, i)
+                if c2 == 34 { break }
+                // Skip escaped chars (\" \\ \n etc) so we don't terminate early.
+                if c2 == 92 and (i + 1) < n {
+                    let next = str_char(src, i + 1)
+                    // Treat backslash-newline as a newline in source positions.
+                    if next == 10 {
+                        let i = i + 2
+                        let line = line + 1
+                        let col = 1
+                        continue
+                    }
+                    let i = i + 2
+                    let col = col + 2
+                    continue
+                }
                 if c2 == 10 {
                     let i = i + 1
                     let line = line + 1
@@ -326,4 +343,26 @@ fn vexc_tokenize(src) {
 
     vexc_push_tok(toks, 0, "", line, col)
     return toks
+}
+
+fn vexc_tokenize_fast_fallback(src) {
+    let raw = tokenize(src)
+    let toks = list_create()
+    let i = 0
+    while i < list_len(raw) {
+        list_push(toks, list_get(raw, i))
+        list_push(toks, list_get(raw, i + 1))
+        list_push(toks, 1)
+        list_push(toks, 1)
+        let i = i + 2
+    }
+    return toks
+}
+
+fn vexc_tokenize_native_fallback(src) {
+    return vexc_tokenize_fast_fallback(src)
+}
+
+fn vexc_tokenize_fast(src) {
+    return vexc_tokenize_native(src)
 }

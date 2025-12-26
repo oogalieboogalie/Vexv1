@@ -3,6 +3,10 @@
 
 use "./core/lex.vex"
 
+let parse_path = ""
+let parse_src = ""
+let parse_error_count = 0
+
 fn pair(a, b) {
     let p = list_create()
     list_push(p, a)
@@ -14,15 +18,27 @@ fn pair_node(p) { return list_get(p, 0) }
 fn pair_pos(p) { return list_get(p, 1) }
 
 fn tok_kind(toks, pos) {
-    let idx = pos * 2
+    let idx = pos * 4
     if idx < list_len(toks) { return list_get(toks, idx) }
     return 0
 }
 
 fn tok_text(toks, pos) {
-    let idx = pos * 2 + 1
+    let idx = pos * 4 + 1
     if idx < list_len(toks) { return list_get(toks, idx) }
     return ""
+}
+
+fn tok_line(toks, pos) {
+    let idx = pos * 4 + 2
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 1
+}
+
+fn tok_col(toks, pos) {
+    let idx = pos * 4 + 3
+    if idx < list_len(toks) { return list_get(toks, idx) }
+    return 1
 }
 
 fn parse_int(s) {
@@ -59,6 +75,59 @@ fn path_dirname(path) {
     return ""
 }
 
+fn line_slice(src, target_line) {
+    let n = str_len(src)
+    let i = 0
+    let line = 1
+    let start = 0
+    while i < n {
+        let c = str_char(src, i)
+        if c == 10 {
+            if line == target_line { return str_slice(src, start, i) }
+            let line = line + 1
+            let i = i + 1
+            let start = i
+            continue
+        }
+        let i = i + 1
+    }
+    if line == target_line { return str_slice(src, start, n) }
+    return ""
+}
+
+fn print_caret(col) {
+    let i = 1
+    while i < col {
+        print(" ")
+        let i = i + 1
+    }
+    print("^\n")
+    return 0
+}
+
+fn parse_error_at(toks, pos, msg) {
+    let line = tok_line(toks, pos)
+    let col = tok_col(toks, pos)
+    if str_len(parse_path) != 0 {
+        print("[vex] error: {parse_path}:{line}:{col}: {msg}\n")
+    } else {
+        print("[vex] error: {line}:{col}: {msg}\n")
+    }
+    let src_text = parse_src
+    if str_len(src_text) != 0 {
+        let line_text = line_slice(src_text, line)
+        if str_len(line_text) != 0 {
+            print(line_text)
+            print("\n")
+            let caret_col = col
+            if caret_col < 1 { let caret_col = 1 }
+            print_caret(caret_col)
+        }
+    }
+    let parse_error_count = parse_error_count + 1
+    return 0
+}
+
 // --- AST tags ---
 // Program: [100, funcs]
 // Func:    [101, name, p1, p2, p3, is_accel, body_block, params]
@@ -85,6 +154,16 @@ fn make_block(stmts) {
     list_push(b, 102)
     list_push(b, stmts)
     return b
+}
+
+fn make_noop_stmt() {
+    let expr = list_create()
+    list_push(expr, 300)
+    list_push(expr, 0)
+    let node = list_create()
+    list_push(node, 205)
+    list_push(node, expr)
+    return node
 }
 
 fn parse_primary(toks, pos) {
@@ -132,6 +211,11 @@ fn parse_primary(toks, pos) {
             list_push(node, tok_text(toks, pos + 1))
             return pair(node, pos + 2)
         }
+        parse_error_at(toks, pos, "dot literal expects identifier")
+        let node = list_create()
+        list_push(node, 301)
+        list_push(node, "")
+        return pair(node, pos + 1)
     }
 
     if k == 1 {
@@ -163,7 +247,9 @@ fn parse_primary(toks, pos) {
         let r = parse_expr(toks, pos + 1)
         let expr = pair_node(r)
         let pos = pair_pos(r)
-        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        let close_k = tok_kind(toks, pos)
+        if close_k == 12 { let pos = pos + 1 }
+        if close_k != 12 { parse_error_at(toks, pos, "expected ')'") }
         return pair(expr, pos)
     }
 
@@ -207,7 +293,9 @@ fn parse_postfix(toks, pos) {
             let r2 = parse_expr(toks, pos + 1)
             let idx_expr = pair_node(r2)
             let pos = pair_pos(r2)
-            if tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+            let close_k = tok_kind(toks, pos)
+            if close_k == 38 { let pos = pos + 1 }
+            if close_k != 38 { parse_error_at(toks, pos, "expected ']'") }
 
             let args = list_create()
             list_push(args, lhs)
@@ -388,7 +476,11 @@ fn parse_expr(toks, pos) {
 
 fn parse_block(toks, pos) {
     let stmts = list_create()
-    if tok_kind(toks, pos) == 13 { let pos = pos + 1 }
+    let opened = 0
+    if tok_kind(toks, pos) == 13 {
+        let opened = 1
+        let pos = pos + 1
+    }
 
     while tok_kind(toks, pos) != 14 and tok_kind(toks, pos) != 0 {
         let r = parse_stmt(toks, pos)
@@ -396,7 +488,12 @@ fn parse_block(toks, pos) {
         let pos = pair_pos(r)
     }
 
-    if tok_kind(toks, pos) == 14 { let pos = pos + 1 }
+    let has_close = 0
+    if tok_kind(toks, pos) == 14 {
+        let has_close = 1
+        let pos = pos + 1
+    }
+    if opened != 0 and has_close == 0 { parse_error_at(toks, pos, "expected '}'") }
     return pair(make_block(stmts), pos)
 }
 
@@ -406,12 +503,24 @@ fn parse_stmt(toks, pos) {
     // let name = expr
     if k == 4 {
         let name = ""
+        if tok_kind(toks, pos + 1) != 1 {
+            parse_error_at(toks, pos + 1, "let expects identifier")
+            return pair(make_noop_stmt(), pos + 1)
+        }
         if tok_kind(toks, pos + 1) == 1 { let name = tok_text(toks, pos + 1) }
 
         let pos = pos + 1
         if tok_kind(toks, pos) == 1 { let pos = pos + 1 }
         while tok_kind(toks, pos) != 15 and tok_kind(toks, pos) != 0 { let pos = pos + 1 }
-        if tok_kind(toks, pos) == 15 { let pos = pos + 1 }
+        let saw_equal = 0
+        if tok_kind(toks, pos) == 15 {
+            let saw_equal = 1
+            let pos = pos + 1
+        }
+        if saw_equal == 0 {
+            parse_error_at(toks, pos, "let expects '='")
+            return pair(make_noop_stmt(), pos)
+        }
 
         let r = parse_expr(toks, pos)
         let expr = pair_node(r)
@@ -427,13 +536,19 @@ fn parse_stmt(toks, pos) {
     // print(expr)
     if k == 5 {
         let pos = pos + 1
-        if tok_kind(toks, pos) == 11 { let pos = pos + 1 }
+        let had_paren = 0
+        if tok_kind(toks, pos) == 11 {
+            let had_paren = 1
+            let pos = pos + 1
+        }
 
         let r = parse_expr(toks, pos)
         let expr = pair_node(r)
         let pos = pair_pos(r)
 
-        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        let close_k = tok_kind(toks, pos)
+        if close_k == 12 { let pos = pos + 1 }
+        if had_paren != 0 and close_k != 12 { parse_error_at(toks, pos, "expected ')' after print expr") }
 
         let node = list_create()
         list_push(node, 201)
@@ -549,15 +664,27 @@ fn parse_stmt(toks, pos) {
     if k == 34 {
         let pos = pos + 1
         let name = ""
+        if tok_kind(toks, pos) != 1 {
+            parse_error_at(toks, pos, "for expects identifier")
+            return pair(make_noop_stmt(), pos)
+        }
         if tok_kind(toks, pos) == 1 { let name = tok_text(toks, pos) }
 
         if tok_kind(toks, pos) == 1 { let pos = pos + 1 }
+        if tok_kind(toks, pos) != 35 {
+            parse_error_at(toks, pos, "for expects 'in'")
+            return pair(make_noop_stmt(), pos)
+        }
         if tok_kind(toks, pos) == 35 { let pos = pos + 1 }
 
         let r1 = parse_expr(toks, pos)
         let start_expr = pair_node(r1)
         let pos = pair_pos(r1)
 
+        if tok_kind(toks, pos) != 36 {
+            parse_error_at(toks, pos, "for expects '..'")
+            return pair(make_noop_stmt(), pos)
+        }
         if tok_kind(toks, pos) == 36 { let pos = pos + 1 }
 
         let r2 = parse_expr(toks, pos)
@@ -617,7 +744,9 @@ fn parse_stmt(toks, pos) {
         let ir = parse_expr(toks, pos + 2)
         let idx_expr = pair_node(ir)
         let pos = pair_pos(ir)
-        if tok_kind(toks, pos) == 38 { let pos = pos + 1 }
+        let close_k = tok_kind(toks, pos)
+        if close_k == 38 { let pos = pos + 1 }
+        if close_k != 38 { parse_error_at(toks, pos, "expected ']'") }
 
         let op = tok_kind(toks, pos)
         if op == 15 or op == 30 {
@@ -669,6 +798,9 @@ fn parse_func(toks, pos, is_accel) {
     if tok_kind(toks, pos) == 6 { let pos = pos + 1 }
 
     let name = tok_text(toks, pos)
+    if tok_kind(toks, pos) != 1 {
+        parse_error_at(toks, pos, "fn expects a name")
+    }
     if tok_kind(toks, pos) == 1 { let pos = pos + 1 }
 
     let p1 = ""
@@ -689,13 +821,22 @@ fn parse_func(toks, pos, is_accel) {
             }
             let pos = pos + 1
         }
-        if tok_kind(toks, pos) == 12 { let pos = pos + 1 }
+        let close_k = tok_kind(toks, pos)
+        if close_k == 12 { let pos = pos + 1 }
+        if close_k != 12 { parse_error_at(toks, pos, "expected ')' after params") }
     }
 
     while tok_kind(toks, pos) != 13 and tok_kind(toks, pos) != 0 { let pos = pos + 1 }
-    let br = parse_block(toks, pos)
-    let body = pair_node(br)
-    let pos = pair_pos(br)
+    let body = 0
+    if tok_kind(toks, pos) == 13 {
+        let br = parse_block(toks, pos)
+        let body = pair_node(br)
+        let pos = pair_pos(br)
+    }
+    if body == 0 {
+        parse_error_at(toks, pos, "expected '{' to start function body")
+        let body = make_block(list_create())
+    }
 
     let node = list_create()
     list_push(node, 101)
@@ -719,7 +860,9 @@ fn list_extend(dst, src) {
     return 0
 }
 
-fn parse_program(toks, path, imports_seen) {
+fn parse_program(toks, path, src, imports_seen) {
+    let parse_path = path
+    let parse_src = src
     let funcs = list_create()
     let pos = 0
 
@@ -728,7 +871,7 @@ fn parse_program(toks, path, imports_seen) {
         if tok_kind(toks, pos) == 41 {
             let pos = pos + 1
             if tok_kind(toks, pos) != 3 {
-                print("error: use expects a string path\n")
+                parse_error_at(toks, pos, "use expects a string path")
                 continue
             }
 
@@ -744,8 +887,8 @@ fn parse_program(toks, path, imports_seen) {
             if env_find(imports_seen, full_path) == 0 {
                 env_set(imports_seen, full_path, 1)
                 let src2 = read_file(full_path)
-                let toks2 = tokenize(src2)
-                let prog2 = parse_program(toks2, full_path, imports_seen)
+                let toks2 = tokenize_with_pos(src2)
+                let prog2 = parse_program(toks2, full_path, src2, imports_seen)
                 list_extend(funcs, list_get(prog2, 1))
             }
             continue
@@ -914,10 +1057,20 @@ fn call3(name, a0, a1, a2, argc, func_env, vals_env, defs_env, prog_args) {
         return 0
     }
     if str_eq(name, "env_find") { return env_find(a0, a1) }
+    if str_eq(name, "env_destroy") {
+        env_destroy(a0)
+        return 0
+    }
 
     if str_eq(name, "str_len") { return str_len(a0) }
     if str_eq(name, "str_char") { return str_char(a0, a1) }
     if str_eq(name, "str_slice") { return str_slice(a0, a1, a2) }
+    if str_eq(name, "consume_digits") { return consume_digits(a0, a1) }
+    if str_eq(name, "consume_ident") { return consume_ident(a0, a1) }
+    if str_eq(name, "skip_line_comment") { return skip_line_comment(a0, a1) }
+    if str_eq(name, "vexc_consume_digits") { return vexc_consume_digits(a0, a1, a2) }
+    if str_eq(name, "vexc_consume_ident") { return vexc_consume_ident(a0, a1, a2) }
+    if str_eq(name, "vexc_tokenize_native") { return vexc_tokenize_native(a0) }
 
     if str_eq(name, "print_bytes") {
         print_bytes(a0)
@@ -937,6 +1090,10 @@ fn call3(name, a0, a1, a2, argc, func_env, vals_env, defs_env, prog_args) {
     if str_eq(name, "list_get") { return list_get(a0, a1) }
     if str_eq(name, "list_set") {
         list_set(a0, a1, a2)
+        return 0
+    }
+    if str_eq(name, "list_destroy") {
+        list_destroy(a0)
         return 0
     }
 
@@ -967,17 +1124,17 @@ fn call3(name, a0, a1, a2, argc, func_env, vals_env, defs_env, prog_args) {
 
 fn eval_call_expr(name, args, func_env, vals_env, defs_env, prog_args) {
     let argc = list_len(args)
-    let use = argc
-    if 3 < use { let use = 3 }
+    let argc_use = argc
+    if 3 < argc_use { let argc_use = 3 }
 
     let a0 = 0
     let a1 = 0
     let a2 = 0
-    if 0 < use { let a0 = eval_arg_expr(args, 0, func_env, vals_env, defs_env, prog_args) }
-    if 1 < use { let a1 = eval_arg_expr(args, 1, func_env, vals_env, defs_env, prog_args) }
-    if 2 < use { let a2 = eval_arg_expr(args, 2, func_env, vals_env, defs_env, prog_args) }
+    if 0 < argc_use { let a0 = eval_arg_expr(args, 0, func_env, vals_env, defs_env, prog_args) }
+    if 1 < argc_use { let a1 = eval_arg_expr(args, 1, func_env, vals_env, defs_env, prog_args) }
+    if 2 < argc_use { let a2 = eval_arg_expr(args, 2, func_env, vals_env, defs_env, prog_args) }
 
-    return call3(name, a0, a1, a2, use, func_env, vals_env, defs_env, prog_args)
+    return call3(name, a0, a1, a2, argc_use, func_env, vals_env, defs_env, prog_args)
 }
 
 fn render_string(func_env, vals_env, defs_env, prog_args, raw) {
@@ -1500,10 +1657,26 @@ fn ceval_call_value(name, args, envs) {
         return 0
     }
     if str_eq(name, "env_find") { return env_find(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "env_destroy") {
+        env_destroy(list_get(args, 0))
+        return 0
+    }
 
     if str_eq(name, "str_len") { return str_len(list_get(args, 0)) }
     if str_eq(name, "str_char") { return str_char(list_get(args, 0), list_get(args, 1)) }
     if str_eq(name, "str_slice") { return str_slice(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+    if str_eq(name, "consume_digits") { return consume_digits(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "consume_ident") { return consume_ident(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "skip_line_comment") { return skip_line_comment(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "vexc_consume_digits") { return vexc_consume_digits(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+    if str_eq(name, "vexc_consume_ident") { return vexc_consume_ident(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+    if str_eq(name, "vexc_tokenize_native") { return vexc_tokenize_native(list_get(args, 0)) }
+    if str_eq(name, "consume_digits") { return consume_digits(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "consume_ident") { return consume_ident(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "skip_line_comment") { return skip_line_comment(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "vexc_consume_digits") { return vexc_consume_digits(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+    if str_eq(name, "vexc_consume_ident") { return vexc_consume_ident(list_get(args, 0), list_get(args, 1), list_get(args, 2)) }
+    if str_eq(name, "vexc_tokenize_native") { return vexc_tokenize_native(list_get(args, 0)) }
 
     if str_eq(name, "print_bytes") {
         print_bytes(list_get(args, 0))
@@ -1523,6 +1696,10 @@ fn ceval_call_value(name, args, envs) {
     if str_eq(name, "list_get") { return list_get(list_get(args, 0), list_get(args, 1)) }
     if str_eq(name, "list_set") {
         list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
+    if str_eq(name, "list_destroy") {
+        list_destroy(list_get(args, 0))
         return 0
     }
 
@@ -2244,6 +2421,10 @@ fn bc_call_value(name, args, envs, bc_funcs, prog_args) {
         return 0
     }
     if str_eq(name, "env_find") { return env_find(list_get(args, 0), list_get(args, 1)) }
+    if str_eq(name, "env_destroy") {
+        env_destroy(list_get(args, 0))
+        return 0
+    }
 
     if str_eq(name, "str_len") { return str_len(list_get(args, 0)) }
     if str_eq(name, "str_char") { return str_char(list_get(args, 0), list_get(args, 1)) }
@@ -2267,6 +2448,10 @@ fn bc_call_value(name, args, envs, bc_funcs, prog_args) {
     if str_eq(name, "list_get") { return list_get(list_get(args, 0), list_get(args, 1)) }
     if str_eq(name, "list_set") {
         list_set(list_get(args, 0), list_get(args, 1), list_get(args, 2))
+        return 0
+    }
+    if str_eq(name, "list_destroy") {
+        list_destroy(list_get(args, 0))
         return 0
     }
 
@@ -2636,12 +2821,12 @@ fn main() {
     }
 
     let src = read_file(path)
-    let toks = tokenize(src)
+    let toks = tokenize_with_pos(src)
 
     if do_parse == 1 {
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         if dump_tree == 1 { dump_program_tree(prog) }
         if dump_tree == 0 { dump_program_summary(prog) }
         return
@@ -2650,7 +2835,7 @@ fn main() {
     if do_eval == 1 {
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         let prog_args = list_create()
         list_push(prog_args, path)
         let i = 3
@@ -2665,7 +2850,7 @@ fn main() {
     if do_bc == 1 {
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         let prog_args = list_create()
         list_push(prog_args, path)
         let i = 3
@@ -2681,7 +2866,7 @@ fn main() {
     if do_bcvex == 1 {
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         let prog_args = list_create()
         list_push(prog_args, path)
         let i = 3
@@ -2697,7 +2882,7 @@ fn main() {
     if do_bcdump == 1 {
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         let bc_funcs = bc_compile_program(prog)
         bc_dump_program(prog, bc_funcs)
         return
@@ -2710,14 +2895,14 @@ fn main() {
         }
         let imports_seen = env_create(0)
         env_set(imports_seen, path, 1)
-        let prog = parse_program(toks, path, imports_seen)
+        let prog = parse_program(toks, path, src, imports_seen)
         let bc_funcs = bc_compile_program(prog)
         bc_save(bc_funcs, out_path)
         print("wrote {out_path}\n")
         return
     }
 
-    let total = list_len(toks) / 2
+    let total = list_len(toks) / 4
     print("tokenized {path}\n")
     print("tokens: {total}\n")
     dump_tokens(toks, 20)

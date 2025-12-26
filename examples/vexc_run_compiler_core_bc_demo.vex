@@ -1,14 +1,15 @@
 use "../src/vexc/eval.vex"
 
 fn main() {
-    print("[vexc] running compiler_core parse demo\n")
+    print("[vexc] running compiler_core bc demo\n")
     let token_cache = vexc_token_cache_create()
     let prog = vexc_parse_program_file_cached_fast("src/compiler_core.vex", token_cache)
 
     let args = list_create()
     list_push(args, "vex")
-    list_push(args, "parse")
+    list_push(args, "bc")
     list_push(args, "examples/hello.vex")
+
     let v = vexc_eval_program_path_args(prog, "src/compiler_core.vex", args)
-    print("\nreturned {v}\n")
+    print("\n[vexc] returned {v}\n")
 }

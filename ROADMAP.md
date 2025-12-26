@@ -7,6 +7,10 @@ This is where we left off and where to go next.
 - vexc front-end is usable for real demos with caching, expanded tokens, and structured error reporting.
 - Diagnostics now include file/line/col, caret snippets, and basic recovery after parse errors.
 - Added error demo runners plus a validation script for error output.
+- Added a vexc eval profiler (budgeted) and a parse-only compiler_core slice to reduce self-hosting overhead.
+- Added a native vexc tokenization fast path plus scan helpers in compiler_core eval.
+- vexc can now run `src/compiler_core.vex` end-to-end for self-hosting demos (parse slice + full compiler_core).
+- vexc can now produce a self-hosted `compiler_core_selfhost.vbc` that reaches a bytecode fixed point (hash-stable rebuild).
 
 ## Active Sprint (Sprint 01): Diagnostics & Recovery
 

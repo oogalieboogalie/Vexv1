@@ -1,0 +1,10 @@
+use "../src/vexc/tokenize.vex"
+
+fn main() {
+    print("[vexc] tokenize probe\n")
+    let src = read_file("src/compiler_core_parse.vex")
+    print("[vexc] read source\n")
+    let toks = vexc_tokenize_native(src)
+    let n = list_len(toks)
+    print("[vexc] tokenized {n} entries\n")
+}

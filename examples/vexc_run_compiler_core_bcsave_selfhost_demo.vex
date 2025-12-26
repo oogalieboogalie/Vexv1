@@ -1,0 +1,23 @@
+use "../src/vexc/eval.vex"
+
+fn main() {
+    print("[vexc] running compiler_core bcsave self-host demo\n")
+    if str_eq(arg_get(1), "go") == 0 {
+        print("[vexc] note: this demo is expensive; re-run with `go` to actually execute it\n")
+        print("[vexc] note: writes `compiler_core_selfhost.vbc` in the repo root\n")
+        return 0
+    }
+    let token_cache = vexc_token_cache_create()
+    let prog = vexc_parse_program_file_cached_fast("src/compiler_core.vex", token_cache)
+    print("[vexc] parsed compiler_core\n")
+
+    let args = list_create()
+    list_push(args, "vex")
+    list_push(args, "bcsave")
+    list_push(args, "src/compiler_core.vex")
+    list_push(args, "compiler_core_selfhost.vbc")
+
+    let v = vexc_eval_program_path_args(prog, "src/compiler_core.vex", args)
+    print("\n[vexc] returned {v}\n")
+}
+

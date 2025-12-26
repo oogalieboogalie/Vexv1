@@ -91,7 +91,15 @@ fn kind_name(k) {
     return "Unknown"
 }
 
-fn tokenize(src) {
+fn push_tok_pos(toks, kind, text, line, col) {
+    list_push(toks, kind)
+    list_push(toks, text)
+    list_push(toks, line)
+    list_push(toks, col)
+    return 0
+}
+
+fn tokenize_slow(src) {
     let toks = list_create()
 
     let i = 0
@@ -117,6 +125,7 @@ fn tokenize(src) {
             let start = i
             let i = i + 1
             while i < n and str_char(src, i) != 34 {
+                if str_char(src, i) == 92 and (i + 1) < n { let i = i + 2; continue }
                 let i = i + 1
             }
             if i < n { let i = i + 1 }
@@ -296,16 +305,291 @@ fn tokenize(src) {
     return toks
 }
 
+fn tokenize_slow_with_pos(src) {
+    let toks = list_create()
+
+    let i = 0
+    let n = str_len(src)
+    let line = 1
+    let col = 1
+    while i < n {
+        let c = str_char(src, i)
+        let handled = 0
+
+        // whitespace (control + space)
+        if handled == 0 and c < 33 {
+            if c == 10 {
+                let line = line + 1
+                let col = 1
+            } else {
+                let col = col + 1
+            }
+            let i = i + 1
+            let handled = 1
+        }
+
+        // line comments: // ...
+        if handled == 0 and c == 47 and (i + 1) < n and str_char(src, i + 1) == 47 {
+            let i = i + 2
+            let col = col + 2
+            while i < n {
+                let c2 = str_char(src, i)
+                if c2 == 10 {
+                    let i = i + 1
+                    let line = line + 1
+                    let col = 1
+                    break
+                }
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+
+        // strings: " ... "
+        if handled == 0 and c == 34 {
+            let start = i
+            let start_line = line
+            let start_col = col
+            let i = i + 1
+            let col = col + 1
+            while i < n and str_char(src, i) != 34 {
+                let c2 = str_char(src, i)
+                if c2 == 92 and (i + 1) < n {
+                    let i = i + 2
+                    let col = col + 2
+                    continue
+                }
+                if c2 == 10 {
+                    let i = i + 1
+                    let line = line + 1
+                    let col = 1
+                    continue
+                }
+                let i = i + 1
+                let col = col + 1
+            }
+            if i < n {
+                let i = i + 1
+                let col = col + 1
+            }
+            push_tok_pos(toks, 3, str_slice(src, start, i), start_line, start_col)
+            let handled = 1
+        }
+
+        // numbers
+        if handled == 0 and 47 < c and c < 58 {
+            let start = i
+            let start_col = col
+            let i = consume_digits(src, i)
+            push_tok_pos(toks, 2, str_slice(src, start, i), line, start_col)
+            let col = col + (i - start)
+            let handled = 1
+        }
+
+        // identifiers / keywords
+        if handled == 0 and (c == 95 or (64 < c and c < 91) or (96 < c and c < 123)) {
+            let start = i
+            let start_col = col
+            let i = consume_ident(src, i)
+            let len = i - start
+
+            let kind = 1
+            if len == 2 {
+                if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 110 { let kind = 6 } // fn
+                if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 102 { let kind = 8 } // if
+                if str_char(src, start + 0) == 111 and str_char(src, start + 1) == 114 { let kind = 25 } // or
+                if str_char(src, start + 0) == 105 and str_char(src, start + 1) == 110 { let kind = 35 } // in
+            }
+            if kind == 1 and len == 3 {
+                if str_char(src, start + 0) == 108 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 { let kind = 4 } // let
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 110 and str_char(src, start + 2) == 100 { let kind = 24 } // and
+                if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 114 { let kind = 34 } // for
+                if str_char(src, start + 0) == 117 and str_char(src, start + 1) == 115 and str_char(src, start + 2) == 101 { let kind = 41 } // use
+            }
+            if kind == 1 and len == 4 {
+                if str_char(src, start + 0) == 101 and str_char(src, start + 1) == 108 and str_char(src, start + 2) == 115 and str_char(src, start + 3) == 101 { let kind = 28 } // else
+                if str_char(src, start + 0) == 116 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 117 and str_char(src, start + 3) == 101 { let kind = 31 } // true
+                if str_char(src, start + 0) == 110 and str_char(src, start + 1) == 117 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 108 { let kind = 33 } // null
+            }
+            if kind == 1 and len == 5 {
+                if str_char(src, start + 0) == 112 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 110 and str_char(src, start + 4) == 116 { let kind = 5 } // print
+                if str_char(src, start + 0) == 119 and str_char(src, start + 1) == 104 and str_char(src, start + 2) == 105 and str_char(src, start + 3) == 108 and str_char(src, start + 4) == 101 { let kind = 9 } // while
+                if str_char(src, start + 0) == 97 and str_char(src, start + 1) == 99 and str_char(src, start + 2) == 99 and str_char(src, start + 3) == 101 and str_char(src, start + 4) == 108 { let kind = 10 } // accel
+                if str_char(src, start + 0) == 102 and str_char(src, start + 1) == 97 and str_char(src, start + 2) == 108 and str_char(src, start + 3) == 115 and str_char(src, start + 4) == 101 { let kind = 32 } // false
+                if str_char(src, start + 0) == 98 and str_char(src, start + 1) == 114 and str_char(src, start + 2) == 101 and str_char(src, start + 3) == 97 and str_char(src, start + 4) == 107 { let kind = 39 } // break
+            }
+            if kind == 1 and len == 6 {
+                if str_char(src, start + 0) == 114 and str_char(src, start + 1) == 101 and str_char(src, start + 2) == 116 and str_char(src, start + 3) == 117 and str_char(src, start + 4) == 114 and str_char(src, start + 5) == 110 { let kind = 7 } // return
+            }
+            if kind == 1 and len == 8 {
+                if str_char(src, start + 0) == 99 and str_char(src, start + 1) == 111 and str_char(src, start + 2) == 110 and str_char(src, start + 3) == 116 and str_char(src, start + 4) == 105 and str_char(src, start + 5) == 110 and str_char(src, start + 6) == 117 and str_char(src, start + 7) == 101 { let kind = 40 } // continue
+            }
+
+            push_tok_pos(toks, kind, str_slice(src, start, i), line, start_col)
+            let col = col + len
+            let handled = 1
+        }
+
+        // single/double-char tokens
+        if handled == 0 and c == 40 { push_tok_pos(toks, 11, "(", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 41 { push_tok_pos(toks, 12, ")", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 123 { push_tok_pos(toks, 13, "{", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 125 { push_tok_pos(toks, 14, "}", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 91 { push_tok_pos(toks, 37, "[", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 93 { push_tok_pos(toks, 38, "]", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 46 {
+            let is_dd = 0
+            if (i + 1) < n and str_char(src, i + 1) == 46 { let is_dd = 1 }
+
+            if is_dd == 1 {
+                push_tok_pos(toks, 36, "..", line, col)
+                let i = i + 2
+                let col = col + 2
+            }
+            if is_dd == 0 {
+                push_tok_pos(toks, 29, ".", line, col)
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 43 {
+            let is_peq = 0
+            if (i + 1) < n and str_char(src, i + 1) == 61 { let is_peq = 1 }
+
+            if is_peq == 1 {
+                push_tok_pos(toks, 30, "+=", line, col)
+                let i = i + 2
+                let col = col + 2
+            }
+            if is_peq == 0 {
+                push_tok_pos(toks, 18, "+", line, col)
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+        if handled == 0 and c == 45 { push_tok_pos(toks, 19, "-", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 42 { push_tok_pos(toks, 20, "*", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+        if handled == 0 and c == 47 { push_tok_pos(toks, 21, "/", line, col); let i = i + 1; let col = col + 1; let handled = 1 }
+
+        if handled == 0 and c == 60 {
+            let is_le = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_le = 1 }
+            }
+
+            if is_le == 1 {
+                push_tok_pos(toks, 23, "<=", line, col)
+                let i = i + 2
+                let col = col + 2
+            }
+            if is_le == 0 {
+                push_tok_pos(toks, 22, "<", line, col)
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 62 {
+            let is_ge = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_ge = 1 }
+            }
+
+            if is_ge == 1 {
+                push_tok_pos(toks, 27, ">=", line, col)
+                let i = i + 2
+                let col = col + 2
+            }
+            if is_ge == 0 {
+                push_tok_pos(toks, 26, ">", line, col)
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 61 {
+            let is_eqeq = 0
+            if (i + 1) < n {
+                if str_char(src, i + 1) == 61 { let is_eqeq = 1 }
+            }
+
+            if is_eqeq == 1 {
+                push_tok_pos(toks, 16, "==", line, col)
+                let i = i + 2
+                let col = col + 2
+            }
+            if is_eqeq == 0 {
+                push_tok_pos(toks, 15, "=", line, col)
+                let i = i + 1
+                let col = col + 1
+            }
+            let handled = 1
+        }
+
+        if handled == 0 and c == 33 {
+            if (i + 1) < n and str_char(src, i + 1) == 61 {
+                push_tok_pos(toks, 17, "!=", line, col)
+                let i = i + 2
+                let col = col + 2
+                let handled = 1
+            }
+        }
+
+        // unknown char: skip
+        if handled == 0 {
+            let i = i + 1
+            let col = col + 1
+        }
+    }
+
+    push_tok_pos(toks, 0, "", line, col)
+    return toks
+}
+
+fn lex_tokenize_native(src) {
+    return tokenize_slow(src)
+}
+
+fn lex_tokenize_native_pos(src) {
+    return tokenize_slow_with_pos(src)
+}
+
+fn tokenize(src) {
+    return lex_tokenize_native(src)
+}
+
+fn tokenize_with_pos(src) {
+    return lex_tokenize_native_pos(src)
+}
+
 fn dump_tokens(toks, max) {
-    let limit = list_len(toks)
-    let max_entries = max * 2
+    let stride = 2
+    let n = list_len(toks)
+    let q = n / 4
+    if (q * 4) == n { let stride = 4 }
+
+    let limit = n
+    let max_entries = max * stride
     if max_entries < limit { let limit = max_entries }
 
     let i = 0
     while i < limit {
         let k = list_get(toks, i)
         let txt = list_get(toks, i + 1)
-        print("tok:{kind_name(k)}:{txt}\n")
-        let i = i + 2
+        if stride == 4 {
+            let line = list_get(toks, i + 2)
+            let col = list_get(toks, i + 3)
+            print("tok:{kind_name(k)}:{txt} @{line}:{col}\n")
+        }
+        if stride != 4 {
+            print("tok:{kind_name(k)}:{txt}\n")
+        }
+        let i = i + stride
     }
 }

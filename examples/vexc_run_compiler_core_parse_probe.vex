@@ -1,0 +1,17 @@
+use "../src/vexc/program.vex"
+
+fn main() {
+    print("[vexc] parse probe\n")
+    let src = read_file("src/compiler_core_parse.vex")
+    print("[vexc] read source\n")
+    let toks = vexc_tokenize_native(src)
+    let n = list_len(toks)
+    print("[vexc] tokenized {n} entries\n")
+
+    let imports_seen = env_create(0)
+    let token_cache = vexc_token_cache_create()
+    env_set(imports_seen, "src/compiler_core_parse.vex", 1)
+    let prog = vexc_parse_program_with_imports_fast(toks, "src/compiler_core_parse.vex", src, imports_seen, token_cache)
+    print("[vexc] parsed program\n")
+    _ = prog
+}
